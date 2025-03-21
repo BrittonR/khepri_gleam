@@ -53,6 +53,28 @@ pub fn list_children_raw(
   path: List(String),
 ) -> Result(dynamic.Dynamic, dynamic.Dynamic)
 
+// Transaction support - external function declarations
+@external(erlang, "khepri_gleam_helper", "do_transaction_put")
+fn do_transaction_put(
+  path: List(String),
+  data: dynamic.Dynamic,
+) -> Result(dynamic.Dynamic, dynamic.Dynamic)
+
+@external(erlang, "khepri_gleam_helper", "do_transaction_get")
+fn do_transaction_get(
+  path: List(String),
+) -> Result(dynamic.Dynamic, dynamic.Dynamic)
+
+@external(erlang, "khepri_gleam_helper", "do_transaction_delete")
+fn do_transaction_delete(
+  path: List(String),
+) -> Result(dynamic.Dynamic, dynamic.Dynamic)
+
+@external(erlang, "khepri_gleam_helper", "do_transaction_exists")
+fn do_transaction_exists(
+  path: List(String),
+) -> Result(dynamic.Dynamic, dynamic.Dynamic)
+
 // Advanced pattern matching types
 pub type NodeCondition {
   // Match on node name equal to string
@@ -279,5 +301,43 @@ pub fn list_directory(
         Error(_) -> Error("Failed to get children")
       }
     }
+  }
+}
+
+// Transaction operation wrappers
+pub fn tx_put_path(path: String, data: a) -> Result(Nil, String) {
+  let path_list = to_khepri_path(path)
+  case do_transaction_put(path_list, dynamic.from(data)) {
+    Ok(_) -> Ok(Nil)
+    Error(_) -> Error("Failed to put in transaction")
+  }
+}
+
+pub fn tx_get_path(path: String) -> Result(dynamic.Dynamic, String) {
+  let path_list = to_khepri_path(path)
+  case do_transaction_get(path_list) {
+    Ok(value) -> Ok(value)
+    Error(_) -> Error("Failed to get in transaction")
+  }
+}
+
+pub fn tx_delete_path(path: String) -> Result(Nil, String) {
+  let path_list = to_khepri_path(path)
+  case do_transaction_delete(path_list) {
+    Ok(_) -> Ok(Nil)
+    Error(_) -> Error("Failed to delete in transaction")
+  }
+}
+
+pub fn tx_exists_path(path: String) -> Result(Bool, String) {
+  let path_list = to_khepri_path(path)
+  case do_transaction_exists(path_list) {
+    Ok(result) -> {
+      case dynamic.bool(result) {
+        Ok(exists) -> Ok(exists)
+        Error(_) -> Error("Failed to decode boolean result")
+      }
+    }
+    Error(_) -> Error("Failed to check exists in transaction")
   }
 }

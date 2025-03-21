@@ -6,7 +6,11 @@
          delete_pattern/1,
          exists_pattern/1,
          list_children/1,
-         get_children_direct/1]).
+         get_children_direct/1,
+         do_transaction_put/2, 
+         do_transaction_get/1, 
+         do_transaction_delete/1, 
+         do_transaction_exists/1]).
 
 %% Convert Gleam condition to Erlang term
 condition_to_erlang({name_is, Name}) ->
@@ -162,6 +166,7 @@ list_all_paths() ->
         _ ->
             []
     end.
+
 get_children_direct(Path) ->
     io:format("Generic child discovery for path: ~p~n", [Path]),
     
@@ -234,3 +239,58 @@ probe_paths(Path) ->
         end,
         TestNames
     ).
+
+%% Transaction operations through helper functions
+do_transaction_put(Path, Data) ->
+    try
+        Result = khepri:transaction(
+            fun() ->
+                khepri_tx:put(Path, Data),
+                ok
+            end),
+        {ok, Result}
+    catch
+        error:Reason -> 
+            io:format("Transaction put failed: ~p~n", [Reason]),
+            {error, Reason}
+    end.
+
+do_transaction_get(Path) ->
+    try
+        Result = khepri:transaction(
+            fun() ->
+                khepri_tx:get(Path)
+            end),
+        Result
+    catch
+        error:Reason -> 
+            io:format("Transaction get failed: ~p~n", [Reason]),
+            {error, Reason}
+    end.
+
+do_transaction_delete(Path) ->
+    try
+        Result = khepri:transaction(
+            fun() ->
+                khepri_tx:delete(Path),
+                ok
+            end),
+        {ok, Result}
+    catch
+        error:Reason -> 
+            io:format("Transaction delete failed: ~p~n", [Reason]),
+            {error, Reason}
+    end.
+
+do_transaction_exists(Path) ->
+    try
+        Result = khepri:transaction(
+            fun() ->
+                khepri_tx:exists(Path)
+            end),
+        {ok, Result}
+    catch
+        error:Reason -> 
+            io:format("Transaction exists failed: ~p~n", [Reason]),
+            {error, Reason}
+    end.
