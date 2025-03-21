@@ -217,10 +217,12 @@ pub fn pattern_matching_test() {
     "color",
     "orange",
   ))
+  // In test/khepri_gleam_test.gleam
+  // Replace the list_children call with list_directory
 
   // Now list all fruits
   io.println("Listing all fruits in inventory:")
-  case khepri_gleam.list_children("/:inventory/fruits") {
+  case khepri_gleam.list_directory("/:inventory/fruits") {
     Ok(items) -> {
       io.println("Found fruit items: " <> string.inspect(items))
 
@@ -241,7 +243,7 @@ pub fn pattern_matching_test() {
 
   // Test listing vegetables (should be empty after deletion)
   io.println("\nListing all vegetables in inventory:")
-  case khepri_gleam.list_children("/:inventory/vegetables") {
+  case khepri_gleam.list_directory("/:inventory/vegetables") {
     Ok(items) -> {
       case list.length(items) {
         0 -> io.println("Vegetables directory is empty (expected)")

@@ -100,39 +100,66 @@ exists_pattern(Path) ->
     end.
 
 
-%% src/khepri_gleam_helper.erl - updated list_children function
 
 %% List children of a path
 list_children(Path) ->
     try
         io:format("Listing children for path: ~p~n", [Path]),
-        % Use a wildcard pattern to match direct children
-        ChildPath = Path ++ ['_'],
-        io:format("Using child path pattern: ~p~n", [ChildPath]),
         
-        % Use get_many to retrieve all matching children
-        case khepri:get_many(ChildPath) of
-            {ok, ChildrenMap} ->
-                % Convert map entries to list of tuples for Gleam
-                ChildList = maps:fold(
-                    fun(ChildFullPath, ChildProps, Acc) ->
-                        % Extract child name (last path component)
-                        ChildName = lists:last(ChildFullPath),
-                        % Extract data from child properties
-                        Data = maps:get(data, ChildProps, undefined),
-                        [{ChildName, Data} | Acc]
+        % First check if the root path exists
+        case khepri:exists(Path) of
+            true ->
+                % Get all paths in the database using khepri:list
+                AllPaths = list_all_paths(),
+                io:format("All paths in database: ~p~n", [AllPaths]),
+                
+                % Filter for direct children of the requested path
+                Children = lists:filtermap(
+                    fun(FullPath) ->
+                        % Check if this is a direct child of the path
+                        PathLen = length(Path),
+                        
+                        % It's a direct child if:
+                        % 1. It's exactly one level deeper than the path
+                        % 2. The path is a prefix of the full path
+                        IsDirectChild = (length(FullPath) == PathLen + 1) 
+                                        and lists:prefix(Path, FullPath),
+                        
+                        if IsDirectChild ->
+                            % Get the child name (last component)
+                            ChildName = lists:last(FullPath),
+                            
+                            % Get the child data
+                            case khepri:get(FullPath) of
+                                {ok, Data} ->
+                                    {true, {ChildName, Data}};
+                                _ ->
+                                    {true, {ChildName, undefined}}
+                            end;
+                        true ->
+                            false
+                        end
                     end,
-                    [],
-                    ChildrenMap
+                    AllPaths
                 ),
-                io:format("Found children: ~p~n", [ChildList]),
-                {ok, ChildList};
-            Error ->
-                io:format("Error getting children: ~p~n", [Error]),
-                {ok, []} % Return empty list if path doesn't exist or on error
+                
+                io:format("Found children: ~p~n", [Children]),
+                {ok, Children};
+            false ->
+                {ok, []}
         end
     catch
         error:Reason ->
             io:format("List children error: ~p~n", [Reason]),
             {error, Reason}
+    end.
+
+% Helper to list all paths in the database
+list_all_paths() ->
+    % Start from the root and collect all paths
+    case khepri:get_many([]) of
+        {ok, AllNodes} ->
+            maps:keys(AllNodes);
+        _ ->
+            []
     end.
