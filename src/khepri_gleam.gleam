@@ -2,12 +2,19 @@
 import gleam/dynamic
 import gleam/dynamic/decode
 import gleam/int
+import gleam/io
 import gleam/list
 import gleam/option
 import gleam/result
 import gleam/string
 
 // External function declarations with correct return types
+
+@external(erlang, "khepri_gleam_helper", "get_children_direct")
+pub fn get_children_direct(
+  path: List(String),
+) -> Result(dynamic.Dynamic, dynamic.Dynamic)
+
 @external(erlang, "khepri", "start")
 pub fn start() -> Nil
 
@@ -240,44 +247,37 @@ pub fn child_count(count: Int, op: CompareOp) -> NodeCondition {
   ChildCount(count, op)
 }
 
-// In src/khepri_gleam.gleam, add this alternative function:
-
-// List children by manually reading the directory structure
 pub fn list_directory(
   base_path: String,
 ) -> Result(List(#(String, dynamic.Dynamic)), String) {
-  // First, check if the base path exists at all
   let path_list = to_khepri_path(base_path)
 
-  // For a real implementation, we'd need some way to discover child nodes
-  // But since Khepri doesn't easily expose a "list directory" function,
-  // we'll manually check specific paths we know should exist
+  // For non-existent paths, just return an empty list
+  case exists_raw(path_list) {
+    False -> {
+      io.println("Path does not exist, returning empty list: " <> base_path)
+      Ok([])
+      // Return empty list instead of error
+    }
+    True -> {
+      io.println("Getting children for path: " <> string.inspect(path_list))
 
-  let known_fruit_paths = case base_path {
-    "/:inventory/fruits" -> ["apple", "banana", "orange"]
-    "/:inventory/vegetables" -> ["carrot"]
-    _ -> []
-  }
+      case get_children_direct(path_list) {
+        Ok(children) -> {
+          io.println("Raw children result: " <> string.inspect(children))
 
-  // Now try to get each possible child and collect results
-  let result =
-    list.filter(known_fruit_paths, fn(child_name) {
-      let child_path = base_path <> "/" <> child_name
-      exists(child_path)
-    })
-
-  // Convert names to name+data pairs
-  let result_with_data =
-    list.map(result, fn(child_name) {
-      let child_path = base_path <> "/" <> child_name
-
-      // We already checked existence, so this should always succeed
-      case get_raw(to_khepri_path(child_path)) {
-        Ok(value) -> #(child_name, value)
-        Error(_) -> #(child_name, dynamic.from(Nil))
-        // Fallback if something went wrong
+          // Parse the result
+          case
+            dynamic.list(dynamic.tuple2(dynamic.string, dynamic.dynamic))(
+              children,
+            )
+          {
+            Ok(items) -> Ok(items)
+            Error(_) -> Error("Failed to decode children list")
+          }
+        }
+        Error(_) -> Error("Failed to get children")
       }
-    })
-
-  Ok(result_with_data)
+    }
+  }
 }
