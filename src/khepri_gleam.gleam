@@ -75,6 +75,20 @@ fn do_transaction_exists(
   path: List(String),
 ) -> Result(dynamic.Dynamic, dynamic.Dynamic)
 
+// Import/Export support - external function declarations
+@external(erlang, "khepri_gleam_helper", "export_data")
+pub fn export_raw(
+  path: List(String),
+  callback_module: String,
+  filename: String,
+) -> Result(dynamic.Dynamic, dynamic.Dynamic)
+
+@external(erlang, "khepri_gleam_helper", "import_data")
+pub fn import_raw(
+  callback_module: String,
+  filename: String,
+) -> Result(dynamic.Dynamic, dynamic.Dynamic)
+
 // Advanced pattern matching types
 pub type NodeCondition {
   // Match on node name equal to string
@@ -339,5 +353,65 @@ pub fn tx_exists_path(path: String) -> Result(Bool, String) {
       }
     }
     Error(_) -> Error("Failed to check exists in transaction")
+  }
+}
+
+/// Export data from the Khepri database to a file
+///
+/// ## Parameters
+/// - `path`: The path to export from (use "/" for the entire database)
+/// - `filename`: The filename to export to
+///
+/// ## Returns
+/// - `Ok(Nil)` if the export was successful
+/// - `Error(String)` with the error message if the export failed
+pub fn export(path: String, filename: String) -> Result(Nil, String) {
+  let path_list = to_khepri_path(path)
+
+  // Use the Erlang export module for serialization
+  case export_raw(path_list, "khepri_export_erlang", filename) {
+    Ok(_) -> Ok(Nil)
+    Error(_) -> Error("Failed to export data to " <> filename)
+  }
+}
+
+/// Import data from a file into the Khepri database
+///
+/// Note: This will not clear existing data. If you want to replace all data,
+/// you should manually clear the database first.
+///
+/// ## Parameters
+/// - `filename`: The filename to import from
+///
+/// ## Returns
+/// - `Ok(Nil)` if the import was successful
+/// - `Error(String)` with the error message if the import failed
+pub fn import_from_file(filename: String) -> Result(Nil, String) {
+  // Use the Erlang import module for deserialization
+  case import_raw("khepri_export_erlang", filename) {
+    Ok(_) -> Ok(Nil)
+    Error(_) -> Error("Failed to import data from " <> filename)
+  }
+}
+
+/// Clear the entire database
+///
+/// This is useful before importing data if you want to replace all existing data.
+///
+/// ## Returns
+/// - `Ok(Nil)` if the clear was successful
+/// - `Error(String)` with the error message if the clear failed
+pub fn clear_all() -> Result(Nil, String) {
+  // Delete the root node to clear everything
+  delete([])
+
+  // Check if the database is empty
+  case list_children("/") {
+    Ok(children) ->
+      case children {
+        [] -> Ok(Nil)
+        _ -> Error("Failed to clear all data, some nodes still exist")
+      }
+    Error(_) -> Error("Failed to verify database clearing")
   }
 }

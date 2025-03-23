@@ -10,7 +10,9 @@
          do_transaction_put/2, 
          do_transaction_get/1, 
          do_transaction_delete/1, 
-         do_transaction_exists/1]).
+         do_transaction_exists/1,
+         export_data/3,
+         import_data/2]).
 
 %% Convert Gleam condition to Erlang term
 condition_to_erlang({name_is, Name}) ->
@@ -288,9 +290,60 @@ do_transaction_exists(Path) ->
             fun() ->
                 khepri_tx:exists(Path)
             end),
-        {ok, Result}
+        
+        % Ensure we return a proper boolean value that Gleam can decode
+        BoolValue = case Result of
+            true -> true;
+            false -> false;
+            {ok, true} -> true;
+            {ok, false} -> false;
+            {ok, Bool} when is_boolean(Bool) -> Bool;
+            _ -> 
+                io:format("Unexpected result type: ~p~n", [Result]),
+                false  % Default to false for unexpected types
+        end,
+        
+        {ok, BoolValue}
     catch
         error:Reason -> 
             io:format("Transaction exists failed: ~p~n", [Reason]),
+            {error, Reason}
+    end.
+
+%% Export data from Khepri to a file
+export_data(Path, CallbackModule, Filename) ->
+    try
+        io:format("Exporting data from path: ~p using ~p to file: ~p~n", [Path, CallbackModule, Filename]),
+        
+        % Convert callback module from string to atom
+        CallbackModuleAtom = list_to_atom(binary_to_list(CallbackModule)),
+        
+        % Call the Khepri export function
+        Result = khepri:export(Path, CallbackModuleAtom, Filename),
+        io:format("Export result: ~p~n", [Result]),
+        
+        {ok, ok}
+    catch
+        error:Reason -> 
+            io:format("Export error: ~p~n", [Reason]),
+            {error, Reason}
+    end.
+
+%% Import data from a file into Khepri
+import_data(CallbackModule, Filename) ->
+    try
+        io:format("Importing data from file: ~p using ~p~n", [Filename, CallbackModule]),
+        
+        % Convert callback module from string to atom
+        CallbackModuleAtom = list_to_atom(binary_to_list(CallbackModule)),
+        
+        % Call the Khepri import function
+        Result = khepri:import(CallbackModuleAtom, Filename),
+        io:format("Import result: ~p~n", [Result]),
+        
+        {ok, ok}
+    catch
+        error:Reason -> 
+            io:format("Import error: ~p~n", [Reason]),
             {error, Reason}
     end.
