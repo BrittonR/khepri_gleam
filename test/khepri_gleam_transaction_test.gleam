@@ -2,15 +2,17 @@
 import gleam/io
 import gleam/string
 import khepri_gleam
+import test_helper
 
 pub fn transaction_test() {
   // Start Khepri
+  test_helper.section("Transaction Tests")
   io.println("Starting Khepri...")
   khepri_gleam.start()
-  io.println("Khepri started successfully")
+  test_helper.assert_pass("Khepri started successfully", True)
 
   // Test put transaction
-  io.println("\n--- Testing put transaction ---")
+  test_helper.subsection("Testing put transaction")
   let put_result =
     khepri_gleam.tx_put_path("/:shop/items/apple", #(
       "price",
@@ -18,51 +20,39 @@ pub fn transaction_test() {
       "quantity",
       10,
     ))
-  case put_result {
-    Ok(_) -> io.println("Put transaction completed successfully")
-    Error(err) -> io.println("Put transaction failed: " <> err)
-  }
+  test_helper.check_ok("Put transaction completed successfully", put_result)
 
   // Verify item exists
-  io.println("\nVerifying items after transaction:")
-  case khepri_gleam.get_string("/:shop/items/apple") {
-    Ok(_) -> io.println("Apple exists (expected)")
-    Error(_) -> io.println("Apple not found (unexpected)")
-  }
+  test_helper.subsection("Verifying items after transaction")
+  let exists_result = khepri_gleam.get_string("/:shop/items/apple")
+  test_helper.check_ok("Apple should exist after transaction", exists_result)
 
   // Test get transaction
-  io.println("\n--- Testing get transaction ---")
+  test_helper.subsection("Testing get transaction")
   let get_result = khepri_gleam.tx_get_path("/:shop/items/apple")
+  test_helper.check_ok("Get transaction should succeed", get_result)
   case get_result {
-    Ok(value) ->
-      io.println("Get transaction succeeded: " <> string.inspect(value))
-    Error(err) -> io.println("Get transaction failed: " <> err)
+    Ok(value) -> io.println("Got value: " <> string.inspect(value))
+    Error(_) -> Nil
   }
 
   // Test exists transaction
-  io.println("\n--- Testing exists transaction ---")
-  let exists_result = khepri_gleam.tx_exists_path("/:shop/items/apple")
-  case exists_result {
-    Ok(True) ->
-      io.println("Exists transaction confirmed item exists (expected)")
-    Ok(False) ->
-      io.println("Exists transaction says item doesn't exist (unexpected)")
-    Error(err) -> io.println("Exists transaction failed: " <> err)
+  test_helper.subsection("Testing exists transaction")
+  let exists_tx_result = khepri_gleam.tx_exists_path("/:shop/items/apple")
+  test_helper.check_ok("Exists transaction should succeed", exists_tx_result)
+  case exists_tx_result {
+    Ok(exists) -> test_helper.assert_pass("Apple should exist", exists)
+    Error(_) -> Nil
   }
 
   // Test delete transaction
-  io.println("\n--- Testing delete transaction ---")
+  test_helper.subsection("Testing delete transaction")
   let delete_result = khepri_gleam.tx_delete_path("/:shop/items/apple")
-  case delete_result {
-    Ok(_) -> io.println("Delete transaction completed successfully")
-    Error(err) -> io.println("Delete transaction failed: " <> err)
-  }
+  test_helper.check_ok("Delete transaction should succeed", delete_result)
 
   // Verify item was deleted
-  case khepri_gleam.get_string("/:shop/items/apple") {
-    Ok(_) -> io.println("Apple still exists (unexpected)")
-    Error(_) -> io.println("Apple was deleted (expected)")
-  }
+  let verify_deleted = khepri_gleam.get_string("/:shop/items/apple")
+  test_helper.check_error("Apple should be deleted", verify_deleted)
 
-  io.println("\n=== Transaction Test Completed ===\n")
+  test_helper.section("Transaction Test Completed")
 }

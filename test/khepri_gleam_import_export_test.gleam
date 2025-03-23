@@ -4,9 +4,10 @@ import gleam/list
 import gleam/string
 import gleeunit
 import khepri_gleam
+import test_helper
 
 pub fn main() {
-  io.println("\n=== Running Import/Export Test ===\n")
+  test_helper.section("Running Import/Export Test")
   import_export_test()
 }
 
@@ -14,10 +15,10 @@ pub fn import_export_test() {
   // Start Khepri
   io.println("Starting Khepri...")
   khepri_gleam.start()
-  io.println("Khepri started successfully")
+  test_helper.assert_pass("Khepri started successfully", True)
 
   // Add some test data
-  io.println("\n--- Adding test data ---")
+  test_helper.subsection("Adding test data")
 
   // Create a simple data structure
   khepri_gleam.put(["inventory", "fruits", "apple"], #(
@@ -48,57 +49,66 @@ pub fn import_export_test() {
   ))
 
   // Verify data was added
-  io.println("\nVerifying data was added:")
-  case khepri_gleam.list_children("/:inventory/fruits") {
+  test_helper.subsection("Verifying data was added")
+  let fruits_result = khepri_gleam.list_children("/:inventory/fruits")
+  test_helper.check_ok("List fruits directory should succeed", fruits_result)
+
+  case fruits_result {
     Ok(fruits) -> {
-      io.println("Found " <> string.inspect(list.length(fruits)) <> " fruits")
+      test_helper.assert_equal("Should find 2 fruits", list.length(fruits), 2)
       io.println("Fruit list: " <> string.inspect(fruits))
     }
-    Error(err) -> io.println("Error listing fruits: " <> err)
+    Error(_) -> Nil
   }
 
   // Export the database
-  io.println("\n--- Exporting database ---")
+  test_helper.subsection("Exporting database")
   let export_result = khepri_gleam.export("/", "khepri_export.erl")
-
-  case export_result {
-    Ok(_) -> io.println("Database exported successfully")
-    Error(err) -> io.println("Export failed: " <> err)
-  }
+  test_helper.check_ok("Database export should succeed", export_result)
 
   // Clear the database
-  io.println("\n--- Clearing database ---")
-  case khepri_gleam.clear_all() {
-    Ok(_) -> io.println("Database cleared successfully")
-    Error(err) -> io.println("Failed to clear database: " <> err)
-  }
+  test_helper.subsection("Clearing database")
+  let clear_result = khepri_gleam.clear_all()
+  test_helper.check_ok("Database clear should succeed", clear_result)
 
   // Verify database is empty
-  io.println("\nVerifying database is empty:")
-  case khepri_gleam.list_children("/:inventory") {
-    Ok([]) -> io.println("Database is empty (expected)")
-    Ok(nodes) -> io.println("Database not empty: " <> string.inspect(nodes))
-    Error(_) -> io.println("Inventory path doesn't exist (expected)")
+  test_helper.subsection("Verifying database is empty")
+  let empty_check = khepri_gleam.list_children("/:inventory")
+  // This could return an error or an empty list - both are valid for "empty database"
+  case empty_check {
+    Ok([]) -> test_helper.assert_pass("Database is empty", True)
+    Ok(nodes) -> {
+      test_helper.assert_pass("Database is empty", False)
+      io.println("Database still contains: " <> string.inspect(nodes))
+    }
+    Error(_) ->
+      test_helper.assert_pass("Inventory path doesn't exist (expected)", True)
   }
 
   // Import the database
-  io.println("\n--- Importing database ---")
+  test_helper.subsection("Importing database")
   let import_result = khepri_gleam.import_from_file("khepri_export.erl")
-
-  case import_result {
-    Ok(_) -> io.println("Database imported successfully")
-    Error(err) -> io.println("Import failed: " <> err)
-  }
+  test_helper.check_ok("Database import should succeed", import_result)
 
   // Verify data was restored
-  io.println("\nVerifying data was restored:")
-  case khepri_gleam.list_children("/:inventory/fruits") {
+  test_helper.subsection("Verifying data was restored")
+  let restored_check = khepri_gleam.list_children("/:inventory/fruits")
+  test_helper.check_ok(
+    "List fruits after import should succeed",
+    restored_check,
+  )
+
+  case restored_check {
     Ok(fruits) -> {
-      io.println("Found " <> string.inspect(list.length(fruits)) <> " fruits")
+      test_helper.assert_equal(
+        "Should find 2 fruits after import",
+        list.length(fruits),
+        2,
+      )
       io.println("Fruit list: " <> string.inspect(fruits))
     }
-    Error(err) -> io.println("Error listing fruits: " <> err)
+    Error(_) -> Nil
   }
 
-  io.println("\n=== Import/Export Test Completed ===\n")
+  test_helper.section("Import/Export Test Completed")
 }

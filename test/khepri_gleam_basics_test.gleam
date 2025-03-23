@@ -5,26 +5,32 @@ import gleam/list
 import gleam/result
 import gleam/string
 import gleeunit
-import gleeunit/should
 import khepri_gleam
+import test_helper
 
 pub fn list_directory_test() {
   // Start Khepri
-  io.println("\n=== Running list_directory Tests ===\n")
+  test_helper.section("Running list_directory Tests")
   khepri_gleam.start()
 
   // Set up test data
   setup_test_data()
 
   // Test listing fruits directory
-  io.println("Testing fruits directory listing:")
-  case khepri_gleam.list_directory("/:inventory/fruits") {
+  test_helper.subsection("Testing fruits directory listing")
+  let fruits_result = khepri_gleam.list_directory("/:inventory/fruits")
+  test_helper.check_ok("List fruits directory should succeed", fruits_result)
+
+  case fruits_result {
     Ok(items) -> {
       io.println("Found " <> int.to_string(list.length(items)) <> " items")
 
       // Check item count
-      list.length(items)
-      |> should.equal(3)
+      test_helper.assert_equal(
+        "Fruits directory should contain 3 items",
+        list.length(items),
+        3,
+      )
 
       // Verify specific items exist
       let item_names =
@@ -33,75 +39,85 @@ pub fn list_directory_test() {
           name
         })
 
-      list.contains(item_names, "apple")
-      |> should.be_true()
+      test_helper.assert_contains(
+        "Apple should be in the fruits list",
+        item_names,
+        "apple",
+      )
 
-      list.contains(item_names, "banana")
-      |> should.be_true()
+      test_helper.assert_contains(
+        "Banana should be in the fruits list",
+        item_names,
+        "banana",
+      )
 
-      list.contains(item_names, "orange")
-      |> should.be_true()
+      test_helper.assert_contains(
+        "Orange should be in the fruits list",
+        item_names,
+        "orange",
+      )
 
       // Verify data content for an item
-      let apple_data = find_item_data(items, "apple")
-      case apple_data {
+      case find_item_data(items, "apple") {
         Ok(data) -> {
           io.println("Found apple data: " <> string.inspect(data))
-          // Data assertions could go here if needed
+          test_helper.assert_pass("Apple data found", True)
         }
         Error(_) -> {
-          // Print an error message instead of using should.fail with a message
-          io.println("ERROR: Apple data not found or invalid")
-          False |> should.be_true()
-          // This will fail the test
+          test_helper.assert_pass("Apple data found", False)
         }
       }
     }
     Error(err) -> {
-      // Print an error message instead of using should.fail with a message
-      io.println("ERROR: Failed to list fruits: " <> err)
-      False |> should.be_true()
-      // This will fail the test
+      io.println("ERROR: " <> err)
     }
   }
 
   // Test listing vegetables directory when empty
-  io.println("\nTesting empty vegetables directory listing:")
-  case khepri_gleam.list_directory("/:inventory/vegetables") {
+  test_helper.subsection("Testing empty vegetables directory listing")
+  let veggies_result = khepri_gleam.list_directory("/:inventory/vegetables")
+  test_helper.check_ok(
+    "List vegetables directory should succeed",
+    veggies_result,
+  )
+
+  case veggies_result {
     Ok(items) -> {
       // Should be empty
-      list.length(items)
-      |> should.equal(0)
-
-      io.println("Correctly found empty vegetables directory")
+      test_helper.assert_equal(
+        "Vegetables directory should be empty",
+        list.length(items),
+        0,
+      )
     }
     Error(err) -> {
-      // Print an error message instead of using should.fail with a message
-      io.println("ERROR: Failed to list vegetables: " <> err)
-      False |> should.be_true()
-      // This will fail the test
+      io.println("ERROR: " <> err)
     }
   }
 
   // Test listing non-existent directory
-  io.println("\nTesting non-existent directory listing:")
-  case khepri_gleam.list_directory("/:inventory/not_real") {
+  test_helper.subsection("Testing non-existent directory listing")
+  let nonexistent_result = khepri_gleam.list_directory("/:inventory/not_real")
+  test_helper.check_ok(
+    "Handling non-existent directory should succeed",
+    nonexistent_result,
+  )
+
+  case nonexistent_result {
     Ok(items) -> {
       // Should be empty
-      list.length(items)
-      |> should.equal(0)
-
-      io.println("Correctly handled non-existent directory")
+      test_helper.assert_equal(
+        "Non-existent directory should return empty list",
+        list.length(items),
+        0,
+      )
     }
-    Error(_) -> {
-      // Print an error message instead of using should.fail with a message
-      io.println("ERROR: Should return empty list for non-existent directory")
-      False |> should.be_true()
-      // This will fail the test
+    Error(err) -> {
+      io.println("ERROR: " <> err)
     }
   }
 
-  io.println("\n=== list_directory Tests Completed ===\n")
+  test_helper.section("list_directory Tests Completed")
 }
 
 fn setup_test_data() {

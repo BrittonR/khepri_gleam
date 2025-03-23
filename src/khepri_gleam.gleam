@@ -18,7 +18,9 @@ pub fn get_children_direct(
 @external(erlang, "khepri", "start")
 pub fn start() -> Nil
 
-@external(erlang, "khepri", "put")
+// @external(erlang, "khepri", "put")
+// pub fn put(path: List(String), data: a) -> Nil
+@external(erlang, "khepri_gleam_helper", "put_with_path")
 pub fn put(path: List(String), data: a) -> Nil
 
 @external(erlang, "khepri", "get")
@@ -394,24 +396,26 @@ pub fn import_from_file(filename: String) -> Result(Nil, String) {
   }
 }
 
-/// Clear the entire database
-///
-/// This is useful before importing data if you want to replace all existing data.
-///
-/// ## Returns
-/// - `Ok(Nil)` if the clear was successful
-/// - `Error(String)` with the error message if the clear failed
-pub fn clear_all() -> Result(Nil, String) {
-  // Delete the root node to clear everything
-  delete([])
+// /// Clear the entire database
+// ///
+// /// This is useful before importing data if you want to replace all existing data.
+// ///
+// /// ## Returns
+// /// - `Ok(Nil)` if the clear was successful
+// /// - `Error(String)` with the error message if the clear failed
+// pub fn clear_all() -> Result(Nil, String) {
+//   // Delete the root node to clear everything
+//   delete([])
 
-  // Check if the database is empty
-  case list_children("/") {
-    Ok(children) ->
-      case children {
-        [] -> Ok(Nil)
-        _ -> Error("Failed to clear all data, some nodes still exist")
-      }
-    Error(_) -> Error("Failed to verify database clearing")
-  }
-}
+//   // Check if the database is empty
+//   case list_children("/") {
+//     Ok(children) ->
+//       case children {
+//         [] -> Ok(Nil)
+//         _ -> Error("Failed to clear all data, some nodes still exist")
+//       }
+//     Error(_) -> Error("Failed to verify database clearing")
+//   }
+// }
+@external(erlang, "khepri_gleam_helper", "clear_all")
+pub fn clear_all() -> Result(Nil, String)
