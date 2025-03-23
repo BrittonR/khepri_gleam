@@ -17,6 +17,9 @@ pub fn import_export_test() {
   khepri_gleam.start()
   test_helper.assert_pass("Khepri started successfully", True)
 
+  // Add this line to clear any leftover data from previous tests
+  let _ = khepri_gleam.clear_all()
+
   // Add some test data
   test_helper.subsection("Adding test data")
 
