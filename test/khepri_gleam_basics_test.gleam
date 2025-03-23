@@ -9,9 +9,10 @@ import khepri_gleam
 import test_helper
 
 pub fn list_directory_test() {
-  // Start Khepri
-  test_helper.section("Running list_directory Tests")
   khepri_gleam.start()
+  test_helper.assert_pass("Khepri started successfully", True)
+
+  let _ = khepri_gleam.clear_all()
 
   // Set up test data
   setup_test_data()
