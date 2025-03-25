@@ -1,6 +1,7 @@
 // test/khepri_gleam_test.gleam
 import gleam/io
 import gleeunit
+import khepri_gleam_advanced_pattern_test
 import khepri_gleam_basics_test
 import khepri_gleam_import_export_test
 import khepri_gleam_pattern_test
@@ -20,6 +21,9 @@ pub fn main() {
 
   // Run pattern matching tests
   khepri_gleam_pattern_test.pattern_matching_test()
+
+  // Run advanced pattern matching tests
+  khepri_gleam_advanced_pattern_test.enhanced_pattern_test()
 
   io.println("\n=== All Tests Completed ===\n")
 }
