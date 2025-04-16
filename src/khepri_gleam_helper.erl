@@ -111,13 +111,51 @@ condition_to_erlang({name_is, Name}) ->
 condition_to_erlang(any) ->
     '_'; % Use underscore for wildcard
 condition_to_erlang({data_matches, Pattern}) ->
-    Pattern;
+    %% Create proper IfDataMatches condition
+    #{'__struct__' => 'Elixir.Khepri.Condition.IfDataMatches',
+      pattern => Pattern,
+      conditions => []};
 condition_to_erlang({all, Conditions}) ->
-    {'$and', lists:map(fun condition_to_erlang/1, Conditions)};
+    %% Create proper IfAll condition 
+    #{'__struct__' => 'Elixir.Khepri.Condition.IfAll',
+      conditions => lists:map(fun condition_to_erlang/1, Conditions)};
 condition_to_erlang({any_of, Conditions}) ->
-    {'$or', lists:map(fun condition_to_erlang/1, Conditions)};
-condition_to_erlang({child_count, Count, _Op}) ->
-    Count;
+    %% Create proper IfAnyOf condition
+    #{'__struct__' => 'Elixir.Khepri.Condition.IfAnyOf',
+      conditions => lists:map(fun condition_to_erlang/1, Conditions)};
+condition_to_erlang({child_count, Count, Op}) ->
+    %% Create proper IfChildListLength condition
+    #{'__struct__' => 'Elixir.Khepri.Condition.IfChildListLength',
+      count => Count,
+      operator => convert_compare_op(Op)};
+condition_to_erlang({node_exists, Exists}) ->
+    %% Create proper IfNodeExists condition
+    #{'__struct__' => 'Elixir.Khepri.Condition.IfNodeExists',
+      exists => Exists};
+condition_to_erlang({'not', Condition}) ->
+    %% Create proper IfNot condition 
+    #{'__struct__' => 'Elixir.Khepri.Condition.IfNot',
+      condition => condition_to_erlang(Condition)};
+condition_to_erlang({data_matches_with_conditions, Pattern, Conditions}) ->
+    %% Create proper IfDataMatches with conditions
+    #{'__struct__' => 'Elixir.Khepri.Condition.IfDataMatches',
+      pattern => Pattern,
+      conditions => Conditions};
+condition_to_erlang({payload_version, Version, Op}) ->
+    %% Create proper IfPayloadVersion condition
+    #{'__struct__' => 'Elixir.Khepri.Condition.IfPayloadVersion',
+      version => Version,
+      operator => Op};
+condition_to_erlang({child_list_version, Version, Op}) ->
+    %% Create proper IfChildListVersion condition
+    #{'__struct__' => 'Elixir.Khepri.Condition.IfChildListVersion',
+      version => Version,
+      operator => Op};
+condition_to_erlang({child_list_length, Count, Op}) ->
+    %% Create proper IfChildListLength condition
+    #{'__struct__' => 'Elixir.Khepri.Condition.IfChildListLength',
+      count => Count,
+      operator => Op};
 condition_to_erlang(Unknown) ->
     io:format("Unknown condition: ~p~n", [Unknown]),
     '_'.
@@ -125,30 +163,62 @@ condition_to_erlang(Unknown) ->
 %% Convert path with conditions to Erlang format
 to_pattern_path(PathWithConditions) ->
     io:format("Converting path: ~p~n", [PathWithConditions]),
-    Path = lists:map(
-        fun({Name, Condition}) ->
-            case Condition of
-                {name_is, _} -> Name;
-                _ -> condition_to_erlang(Condition)
-            end
-        end,
-        PathWithConditions
-    ),
+    % Check if the path is already converted (list of binaries)
+    % or needs conversion (list of tuples)
+    Path = case PathWithConditions of
+        [] -> 
+            [];
+        [{_, _}|_] -> 
+            % This is a tuple format path that needs conversion
+            lists:map(
+                fun({Name, Condition}) ->
+                    case Condition of
+                        {name_is, _} -> Name;
+                        _ -> condition_to_erlang(Condition)
+                    end
+                end,
+                PathWithConditions
+            );
+        _ -> 
+            % Already in the right format
+            PathWithConditions
+    end,
+    
     io:format("Converted to: ~p~n", [Path]),
     Path.
 
-%% Get with pattern
+%% Get with pattern - UPDATED
 get_pattern(Path) ->
     try
         io:format("Trying to get with path: ~p~n", [Path]),
+        
+        % Check if path needs conversion
+        ConvertedPath = case Path of
+            [] -> 
+                [];
+            [{_, _}|_] -> 
+                % This is a pattern path that needs conversion
+                to_pattern_path(Path);
+            _ -> 
+                % Already in the right format
+                Path
+        end,
+        
         % Check if path contains wildcards
-        HasWildcard = lists:any(fun(Part) -> Part =:= '_' end, Path),
+        HasWildcard = lists:any(fun(Part) -> 
+            case Part of
+                '_' -> true;
+                Element when is_tuple(Element) -> true;
+                Element when is_map(Element) -> true;
+                _ -> false
+            end
+        end, ConvertedPath),
         
         Result = case HasWildcard of
             true ->
                 % For wildcard patterns, try a different approach
                 % First get the parent path (without the wildcard)
-                ParentPath = lists:droplast(Path),
+                ParentPath = lists:droplast(ConvertedPath),
                 io:format("Using parent path: ~p~n", [ParentPath]),
                 
                 % Check if parent exists
@@ -165,7 +235,7 @@ get_pattern(Path) ->
             false ->
                 % Use regular get for direct paths
                 io:format("Using get for direct path~n"),
-                khepri:get(Path)
+                khepri:get(ConvertedPath)
         end,
         
         io:format("Get result: ~p~n", [Result]),
@@ -176,29 +246,64 @@ get_pattern(Path) ->
             {error, unknown_error}
     end.
 
-%% Delete with pattern
+%% Delete with pattern - UPDATED
 delete_pattern(Path) ->
     try
         io:format("Trying to delete with path: ~p~n", [Path]),
-        khepri:delete(Path)
+        
+        % Check if path needs conversion
+        ConvertedPath = case Path of
+            [] -> 
+                [];
+            [{_, _}|_] -> 
+                % This is a pattern path that needs conversion
+                to_pattern_path(Path);
+            _ -> 
+                % Already in the right format
+                Path
+        end,
+        
+        khepri:delete(ConvertedPath)
     catch
         error:Reason -> 
             io:format("Delete pattern error: ~p~n", [Reason]),
             ok
     end.
 
-%% Exists with pattern - improved to handle wildcards
+%% Exists with pattern - UPDATED
 exists_pattern(Path) ->
     try
         io:format("Trying exists pattern with path: ~p~n", [Path]),
         
+        % Check if path needs conversion
+        ConvertedPath = case Path of
+            [] -> 
+                [];
+            [{_, _}|_] -> 
+                % This is a pattern path that needs conversion
+                to_pattern_path(Path);
+            _ -> 
+                % Already in the right format
+                io:format("Path is already in raw format~n"),
+                Path
+        end,
+        
+        io:format("Converted path: ~p~n", [ConvertedPath]),
+        
         % Check if this is a pattern that might match multiple nodes
-        HasWildcard = lists:any(fun(Part) -> Part =:= '_' end, Path),
+        HasWildcard = lists:any(fun(Part) -> 
+            case Part of
+                '_' -> true;
+                Element when is_tuple(Element) -> true;
+                Element when is_map(Element) -> true;
+                _ -> false
+            end
+        end, ConvertedPath),
         
         if HasWildcard ->
             % For wildcard patterns, we need to check if any children exist
             % Get the parent path (without the wildcard)
-            ParentPath = lists:sublist(Path, length(Path) - 1),
+            ParentPath = lists:sublist(ConvertedPath, length(ConvertedPath) - 1),
             io:format("Checking parent path: ~p for children~n", [ParentPath]),
             
             % Check if parent exists
@@ -217,8 +322,8 @@ exists_pattern(Path) ->
                     length(ChildPaths) > 0
             end;
         true ->
-            % For direct paths without wildcards
-            Result = khepri:exists(Path),
+            % For direct paths without wildcards, use direct exists
+            Result = khepri:exists(ConvertedPath),
             io:format("Direct path exists check: ~p~n", [Result]),
             Result
         end
@@ -405,6 +510,7 @@ do_transaction_delete(Path) ->
             io:format("Transaction delete failed: ~p~n", [Reason]),
             {error, Reason}
     end.
+
 do_transaction_exists(Path) ->
     try
         Result = khepri:transaction(
@@ -511,3 +617,11 @@ clear_all() ->
     khepri:delete([]),
     
     {ok, ok}.
+
+%% Helper function for operator conversion
+convert_compare_op(greater_than) -> 'gt';
+convert_compare_op(less_than) -> 'lt';
+convert_compare_op(equal) -> 'eq';
+convert_compare_op(greater_than_or_equal) -> 'ge';
+convert_compare_op(less_than_or_equal) -> 'le';
+convert_compare_op(_) -> 'eq'.  % Default to equals

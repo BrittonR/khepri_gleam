@@ -22,55 +22,27 @@
 
 %% Node existence condition
 if_node_exists(Exists) ->
-    case Exists of
-        true -> #{
-            '__struct__' => 'Elixir.Khepri.Condition.IfNodeExists',
-            exists => true
-        };
-        false -> #{
-            '__struct__' => 'Elixir.Khepri.Condition.IfNodeExists',
-            exists => false
-        }
-    end.
+    {node_exists, Exists}.
 
 %% Data pattern matching with match specifications
 if_data_matches_pattern(Pattern, Conditions) ->
-    #{
-        '__struct__' => 'Elixir.Khepri.Condition.IfDataMatches',
-        pattern => Pattern,
-        conditions => Conditions
-    }.
+    {data_matches_with_conditions, Pattern, Conditions}.
 
 %% Payload version condition
 if_payload_version(Version, Op) ->
-    #{
-        '__struct__' => 'Elixir.Khepri.Condition.IfPayloadVersion',
-        version => Version,
-        operator => convert_op(Op)
-    }.
+    {payload_version, Version, convert_op(Op)}.
 
 %% Child list version condition
 if_child_list_version(Version, Op) ->
-    #{
-        '__struct__' => 'Elixir.Khepri.Condition.IfChildListVersion',
-        version => Version,
-        operator => convert_op(Op)
-    }.
+    {child_list_version, Version, convert_op(Op)}.
 
 %% Child list length condition
 if_child_list_length(Count, Op) ->
-    #{
-        '__struct__' => 'Elixir.Khepri.Condition.IfChildListLength',
-        count => Count,
-        operator => convert_op(Op)
-    }.
+    {child_list_length, Count, convert_op(Op)}.
 
 %% Negation condition
 if_not(Condition) ->
-    #{
-        '__struct__' => 'Elixir.Khepri.Condition.IfNot',
-        condition => Condition
-    }.
+    {'not', Condition}.
 
 %% Wildcard that matches any single node
 wildcard_star() ->
@@ -162,7 +134,7 @@ find_with_attribute(Path, AttrName, AttrValue) ->
                 {error, "Failed to get children"}
         end
     catch
-        error:ErrorReason ->  %% Changed variable name here to avoid shadowing
+        error:ErrorReason ->
             io:format("Exception in find_with_attribute: ~p~n", [ErrorReason]),
             {error, io_lib:format("Error in find_with_attribute: ~p", [ErrorReason])}
     end.
@@ -188,6 +160,7 @@ check_list_for_attribute([Key, Value | Rest], AttrName, AttrValue) ->
         false -> check_list_for_attribute(Rest, AttrName, AttrValue)
     end;
 check_list_for_attribute(_, _, _) -> false.
+
 %% ----- HELPER FUNCTIONS -----
 
 %% Insert an element at a specific position in a list
