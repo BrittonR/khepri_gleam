@@ -312,7 +312,13 @@ fn test_data_matching() {
     #("store", khepri_pattern.is("store")),
     #("products", khepri_pattern.is("products")),
     #("food", khepri_pattern.is("food")),
-    #("apples", khepri_pattern.data_matches(#("organic", True))),
+    #(
+      "apples",
+      khepri_pattern.if_data_matches_pattern(
+        dynamic.from(#("organic", True)),
+        [],
+      ),
+    ),
   ]
 
   let organic_exists = khepri_pattern.exists(organic_pattern)
