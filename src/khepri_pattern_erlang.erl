@@ -141,18 +141,53 @@ path_with_star_star(Path, Position) ->
 
 %% Find all nodes with a specific attribute value
 find_with_attribute(Path, AttrName, AttrValue) ->
-    %% Create a path with a wildcard at the end and a data condition
-    FullPath = Path ++ [?KHEPRI_WILDCARD_STAR],
+    io:format("Finding items with ~p=~p in path ~p~n", [AttrName, AttrValue, Path]),
     try
-        case khepri_adv:get_many(FullPath, #{favor => {AttrName, AttrValue}}) of
-            {ok, Nodes} -> {ok, Nodes};
-            {error, Reason} -> {error, io_lib:format("~p", [Reason])}
+        %% Get all children of the path
+        case khepri_gleam_helper:get_children_direct(Path) of
+            {ok, Children} ->
+                io:format("Found children: ~p~n", [Children]),
+                %% Filter children with matching attribute
+                MatchingChildren = [
+                    {Name, Data} || {Name, Data} <- Children, 
+                                  check_data_for_attribute(Data, AttrName, AttrValue)
+                ],
+                io:format("Matching children: ~p~n", [MatchingChildren]),
+                case MatchingChildren of
+                    [] -> {error, "No matching items found"};
+                    _ -> {ok, MatchingChildren}
+                end;
+            Error ->
+                io:format("Error getting children: ~p~n", [Error]),
+                {error, "Failed to get children"}
         end
     catch
-        error:Error ->
-            {error, io_lib:format("Error in find_with_attribute: ~p", [Error])}
+        error:ErrorReason ->  %% Changed variable name here to avoid shadowing
+            io:format("Exception in find_with_attribute: ~p~n", [ErrorReason]),
+            {error, io_lib:format("Error in find_with_attribute: ~p", [ErrorReason])}
     end.
 
+%% Helper functions for checking attributes in tuple data
+check_data_for_attribute(Data, AttrName, AttrValue) when is_tuple(Data) ->
+    List = tuple_to_list(Data),
+    check_list_for_attribute(List, AttrName, AttrValue);
+check_data_for_attribute(_, _, _) -> false.
+
+check_list_for_attribute([Key, Value | Rest], AttrName, AttrValue) ->
+    KeyMatches = case is_binary(Key) andalso is_list(AttrName) of
+        true -> Key =:= list_to_binary(AttrName);
+        false -> Key =:= AttrName
+    end,
+    
+    case KeyMatches of
+        true -> 
+            case Value =:= AttrValue of
+                true -> true;
+                false -> check_list_for_attribute(Rest, AttrName, AttrValue)
+            end;
+        false -> check_list_for_attribute(Rest, AttrName, AttrValue)
+    end;
+check_list_for_attribute(_, _, _) -> false.
 %% ----- HELPER FUNCTIONS -----
 
 %% Insert an element at a specific position in a list
