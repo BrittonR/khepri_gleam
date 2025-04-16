@@ -184,16 +184,23 @@ fn test_basic_patterns() {
   test_helper.assert_pass("Laptop path should match", laptop_exists)
 
   // Test with 'any' pattern
+  // Test with 'any' pattern
   let any_electronic_pattern = [
     #("store", khepri_pattern.is("store")),
     #("products", khepri_pattern.is("products")),
     #("electronics", khepri_pattern.is("electronics")),
-    #("product", khepri_pattern.any()),
+    // Instead of using a specific name "product" with any condition
+    // Use an empty string for the name and let the any condition do the matching
+    #("", khepri_pattern.any()),
   ]
 
   let any_electronic_exists = khepri_pattern.exists(any_electronic_pattern)
-  test_helper.assert_pass("Any electronic should match", any_electronic_exists)
-
+  // Use assert_equal instead of assert_pass for clearer expectations
+  test_helper.assert_equal(
+    "Any electronic should match",
+    any_electronic_exists,
+    True,
+  )
   // Test path that shouldn't match
   let missing_pattern = [
     #("store", khepri_pattern.is("store")),

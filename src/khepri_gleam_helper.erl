@@ -187,10 +187,41 @@ delete_pattern(Path) ->
             ok
     end.
 
-%% Exists with pattern
+%% Exists with pattern - improved to handle wildcards
 exists_pattern(Path) ->
     try
-        khepri:exists(Path)
+        io:format("Trying exists pattern with path: ~p~n", [Path]),
+        
+        % Check if this is a pattern that might match multiple nodes
+        HasWildcard = lists:any(fun(Part) -> Part =:= '_' end, Path),
+        
+        if HasWildcard ->
+            % For wildcard patterns, we need to check if any children exist
+            % Get the parent path (without the wildcard)
+            ParentPath = lists:sublist(Path, length(Path) - 1),
+            io:format("Checking parent path: ~p for children~n", [ParentPath]),
+            
+            % Check if parent exists
+            case khepri:exists(ParentPath) of
+                false -> false;
+                true -> 
+                    % Use our registry to check for children
+                    AllPaths = get_registered_paths(),
+                    ChildPaths = [
+                        P || P <- AllPaths, 
+                        length(P) > length(ParentPath),
+                        lists:prefix(ParentPath, P)
+                    ],
+                    
+                    io:format("Child paths from registry: ~p~n", [ChildPaths]),
+                    length(ChildPaths) > 0
+            end;
+        true ->
+            % For direct paths without wildcards
+            Result = khepri:exists(Path),
+            io:format("Direct path exists check: ~p~n", [Result]),
+            Result
+        end
     catch
         error:Reason -> 
             io:format("Exists pattern error: ~p~n", [Reason]),
