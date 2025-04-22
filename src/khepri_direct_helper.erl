@@ -1,4 +1,4 @@
-%% src/khepri_direct_helper.erl
+%% Fixed khepri_direct_helper.erl with proper variable safety
 -module(khepri_direct_helper).
 -export([start_node/4]).
 
@@ -21,9 +21,17 @@ start_node(Name, Cookie, Role, PrimaryNode) ->
     io:format("Using name type: ~p~n", [NameType]),
     
     % Start distribution
-    {ok, _} = net_kernel:start([NodeAtom, NameType]),
-    erlang:set_cookie(node(), CookieAtom),
-    io:format("Distribution started successfully~n"),
+    case net_kernel:start([NodeAtom, NameType]) of
+        {ok, _} -> 
+            erlang:set_cookie(node(), CookieAtom),
+            io:format("Distribution started successfully~n");
+        {error, {already_started, _}} ->
+            erlang:set_cookie(node(), CookieAtom),
+            io:format("Distribution already started~n");
+        Error ->
+            io:format("Failed to start distribution: ~p~n", [Error]),
+            throw({distribution_error, Error})
+    end,
     
     % Start Khepri
     io:format("Starting Khepri...~n"),
@@ -52,7 +60,7 @@ start_node(Name, Cookie, Role, PrimaryNode) ->
 run_primary() ->
     % Wait for leader election
     io:format("Waiting for leader election...~n"),
-    khepri_cluster:wait_for_leader(),
+    ok = khepri_cluster:wait_for_leader(),
     io:format("Leader election completed~n"),
     
     % Store some test data
@@ -83,8 +91,8 @@ run_secondary(PrimaryNode) ->
             % Write some data
             io:format("~nWriting data to the cluster:~n"),
             write_secondary_data();
-        {error, Reason} ->
-            io:format("Failed to join cluster: ~p~n", [Reason]),
+        {error, JoinError} ->
+            io:format("Failed to join cluster: ~p~n", [JoinError]),
             io:format("~nPossible reasons for failure:~n"),
             io:format("1. The primary node isn't running~n"),
             io:format("2. The node names are incorrect~n"),
@@ -117,36 +125,38 @@ run_client(PrimaryNode) ->
             read_test_data(),
             read_secondary_data(),
             read_client_data();
-        {error, Reason} ->
-            io:format("Failed to join cluster: ~p~n", [Reason])
+        {error, JoinError} ->
+            io:format("Failed to join cluster: ~p~n", [JoinError])
     end.
 
 %% Print cluster status (directly using khepri_cluster module)
 print_cluster_status() ->
     io:format("~nCluster status:~n"),
     
-    % Get cluster members
+    % Get cluster members - fixed variable safety
     case khepri_cluster:members() of
         {ok, Members} ->
             io:format("  Members: ~p~n", [Members]);
-        {error, Reason} ->
-            io:format("  Failed to get members: ~p~n", [Reason])
+        {error, _} -> 
+            % Using just underscore to ignore variable entirely
+            io:format("  Failed to get members~n")
     end,
     
-    % Get cluster nodes
+    % Get cluster nodes - fixed variable safety
     case khepri_cluster:nodes() of
         {ok, Nodes} ->
             io:format("  Nodes: ~p~n", [Nodes]);
-        {error, Reason} ->
-            io:format("  Failed to get nodes: ~p~n", [Reason])
+        {error, _} -> 
+            % Using just underscore to ignore variable entirely
+            io:format("  Failed to get nodes~n")
     end.
 
-%% Helper functions for data operations - using direct Khepri calls
+%% Helper functions for data operations - DIRECT KHEPRI CALLS
 
 write_test_data() ->
     io:format("~nWriting test data to the cluster...~n"),
     
-    % Create paths using binary strings
+    % Create paths using binary strings for Khepri
     Paths = [
         [<<"cluster_test">>, <<"fruits">>, <<"apple">>],
         [<<"cluster_test">>, <<"fruits">>, <<"banana">>],
@@ -165,7 +175,7 @@ write_test_data() ->
         PathStr = format_path(Path),
         io:format("Writing: ~s = ~s~n", [PathStr, Value]),
         
-        % Write to Khepri
+        % Write directly to Khepri (not through Gleam)
         khepri:put(Path, Value)
     end, Paths).
 
@@ -199,8 +209,10 @@ read_test_data() ->
     lists:foreach(fun(Path) ->
         PathStr = format_path(Path),
         case khepri:get(Path) of
-            {ok, Value} -> io:format("  ~s = ~p~n", [PathStr, Value]);
-            {error, Reason} -> io:format("  ~s = ERROR: ~p~n", [PathStr, Reason])
+            {ok, Value} -> 
+                io:format("  ~s = ~p~n", [PathStr, Value]);
+            {error, GetError} -> 
+                io:format("  ~s = ERROR: ~p~n", [PathStr, GetError])
         end
     end, Paths).
 
@@ -211,8 +223,10 @@ read_secondary_data() ->
     PathStr = format_path(Path),
     
     case khepri:get(Path) of
-        {ok, Value} -> io:format("  ~s = ~p~n", [PathStr, Value]);
-        {error, Reason} -> io:format("  ~s = ERROR: ~p~n", [PathStr, Reason])
+        {ok, Value} -> 
+            io:format("  ~s = ~p~n", [PathStr, Value]);
+        {error, GetError} -> 
+            io:format("  ~s = ERROR: ~p~n", [PathStr, GetError])
     end.
 
 read_client_data() ->
@@ -222,8 +236,10 @@ read_client_data() ->
     PathStr = format_path(Path),
     
     case khepri:get(Path) of
-        {ok, Value} -> io:format("  ~s = ~p~n", [PathStr, Value]);
-        {error, Reason} -> io:format("  ~s = ERROR: ~p~n", [PathStr, Reason])
+        {ok, Value} -> 
+            io:format("  ~s = ~p~n", [PathStr, Value]);
+        {error, GetError} -> 
+            io:format("  ~s = ERROR: ~p~n", [PathStr, GetError])
     end.
 
 %% Format a path for display
