@@ -3,6 +3,7 @@ import gleam/io
 import gleeunit
 import khepri_gleam_advanced_pattern_test
 import khepri_gleam_basics_test
+import khepri_gleam_cluster_test
 import khepri_gleam_import_export_test
 import khepri_gleam_pattern_test
 import khepri_gleam_transaction_test
@@ -24,6 +25,9 @@ pub fn main() {
 
   // Run advanced pattern matching tests
   khepri_gleam_advanced_pattern_test.enhanced_pattern_test()
+
+  // Run clustering tests
+  khepri_gleam_cluster_test.cluster_basics_test()
 
   io.println("\n=== All Tests Completed ===\n")
 }
