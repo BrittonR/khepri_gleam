@@ -1,11 +1,9 @@
-//// Khepri multi-node cluster example
-////
-//// This module demonstrates how to create and use a multi-node Khepri cluster.
-//// You'll need to run this module on multiple terminals with different node names.
-
-// src/khepri_multi_node.gleam
+// Modified khepri_multi_node.gleam with better entry point
+// Add this at the top of your file and keep all other code the same
 
 import gleam/erlang
+import gleam/erlang/atom
+import gleam/erlang/node
 import gleam/erlang/process
 import gleam/int
 import gleam/io
@@ -16,26 +14,91 @@ import gleam/string
 import khepri_gleam
 import khepri_gleam_cluster
 
-/// Mode of operation for the node
-type NodeRole {
-  /// First node in the cluster (will be joined by others)
-  Primary
+/// Entry point for direct Erlang execution
+@external(erlang, "khepri_multi_node_helper", "start_node")
+pub fn start_node(
+  name: String,
+  cookie: String,
+  role: String,
+  primary_node: String,
+) -> Nil
 
-  /// Secondary node that joins the cluster
-  Secondary(primary_node: String)
-
-  /// Node that just queries data
-  Client(primary_node: String)
-
-  /// Invalid arguments provided
-  InvalidArgs
-}
-
+/// Helper module to initialize distributed Erlang and start main()
+///
+/// Create a file named src/khepri_multi_node_helper.erl with this content:
+///
+/// ```erlang
+/// -module(khepri_multi_node_helper).
+/// -export([start_node/4]).
+///
+/// start_node(Name, Cookie, Role, PrimaryNode) ->
+///   net_kernel:start([list_to_atom(Name), shortnames]),
+///   erlang:set_cookie(node(), list_to_atom(Cookie)),
+///   Args = case Role of
+///     "primary" -> ["primary"];
+///     "secondary" -> ["secondary", PrimaryNode];
+///     "client" -> ["client", PrimaryNode]
+///   end,
+///   khepri_multi_node:main_0().
+/// ```
 /// Main entry point - run with different arguments to test multi-node clustering
 pub fn main() -> Nil {
   // Get command line arguments
   let args = erlang.start_arguments()
 
+  // Check if we're running as a distributed node
+  let current_node = node.self()
+  let node_name = atom.to_string(node.to_atom(current_node))
+  let is_distributed = string.contains(node_name, "@")
+
+  // Print node info
+  io.println("\n=== Khepri Multi-Node Cluster Example ===")
+  io.println("Running as node: " <> node_name)
+
+  // Check for direct execution instructions
+  case args {
+    ["run_direct"] -> {
+      io.println(
+        "\nTo run distributed nodes properly, create an Erlang helper module as described",
+      )
+      io.println(
+        "in the comments at the top of this file, then use these commands:",
+      )
+      io.println("\nFor primary node:")
+      io.println(
+        "erl -pa build/dev/erlang/*/ebin -pa build/dev/erlang/*/_gleam_artefacts -eval",
+      )
+      io.println(
+        "'khepri_multi_node_helper:start_node(\"node1@127.0.0.1\", \"khepri_test\", \"primary\", \"\")'",
+      )
+      io.println("\nFor secondary node:")
+      io.println(
+        "erl -pa build/dev/erlang/*/ebin -pa build/dev/erlang/*/_gleam_artefacts -eval",
+      )
+      io.println(
+        "'khepri_multi_node_helper:start_node(\"node2@127.0.0.1\", \"khepri_test\", \"secondary\", \"node1@127.0.0.1\")'",
+      )
+      Nil
+    }
+    _ -> continue_main(args, is_distributed)
+  }
+}
+
+/// Continue with the main logic
+fn continue_main(args: List(String), is_distributed: Bool) -> Nil {
+  // Use case expression instead of if (Gleam doesn't have if expressions)
+  case is_distributed {
+    False -> {
+      io.println("\nWARNING: Not running as a distributed Erlang node!")
+      io.println("For direct execution with distribution, try:")
+      io.println("gleam run -m khepri_multi_node -- run_direct")
+      process.sleep(2000)
+      Nil
+    }
+    True -> Nil
+  }
+
+  // The rest of your code remains the same...
   // Parse arguments to determine node role
   let role = case args {
     ["primary"] -> Primary
@@ -57,11 +120,24 @@ pub fn main() -> Nil {
   }
 }
 
+type NodeRole {
+  /// First node in the cluster (will be joined by others)
+  Primary
+
+  /// Secondary node that joins the cluster
+  Secondary(primary_node: String)
+
+  /// Node that just queries data
+  Client(primary_node: String)
+
+  /// Invalid arguments provided
+  InvalidArgs
+}
+
 /// Run the node with the specified role
 fn run_node(role: NodeRole) -> Nil {
-  // Start Khepri and clustering
-  io.println("\n=== Khepri Multi-Node Cluster Example ===\n")
-  io.println("Starting Khepri...")
+  // Start Khepri
+  io.println("\nStarting Khepri...")
   khepri_gleam.start()
 
   // Start the cluster actor
@@ -77,27 +153,23 @@ fn run_node(role: NodeRole) -> Nil {
   }
 
   // Keep running to maintain the cluster
+  io.println("\nNode is running. Press Ctrl+C to stop.")
   process.sleep_forever()
 }
 
 fn print_usage() -> Nil {
   io.println("Usage:")
-  io.println("  Primary node:    gleam run -m khepri_multi_node -- primary")
   io.println(
-    "  Secondary node:  gleam run -m khepri_multi_node -- secondary primary_node@host",
+    "  Primary node:    gleam run -m khepri_multi_node -- --name node1@127.0.0.1 --cookie khepri_test primary",
   )
   io.println(
-    "  Client node:     gleam run -m khepri_multi_node -- client primary_node@host",
-  )
-  io.println("\nExample:")
-  io.println(
-    "  Terminal 1: gleam run -m khepri_multi_node -- --name node1@127.0.0.1 --cookie khepri_test primary",
+    "  Secondary node:  gleam run -m khepri_multi_node -- --name node2@127.0.0.1 --cookie khepri_test secondary node1@127.0.0.1",
   )
   io.println(
-    "  Terminal 2: gleam run -m khepri_multi_node -- --name node2@127.0.0.1 --cookie khepri_test secondary node1@127.0.0.1",
+    "  Client node:     gleam run -m khepri_multi_node -- --name node3@127.0.0.1 --cookie khepri_test client node1@127.0.0.1",
   )
   io.println(
-    "  Terminal 3: gleam run -m khepri_multi_node -- --name node3@127.0.0.1 --cookie khepri_test client node1@127.0.0.1",
+    "\nIMPORTANT: The node arguments (--name, --cookie) must come AFTER the -- separator",
   )
 }
 
@@ -134,8 +206,21 @@ fn run_secondary_node(
   io.println("Running as SECONDARY node")
   io.println("Joining primary node: " <> primary_node)
 
+  // Check if the primary node name contains @ character (proper distributed node)
+  let validated_node = case string.contains(primary_node, "@") {
+    True -> primary_node
+    False -> {
+      io.println(
+        "\nWARNING: The primary node name doesn't look like a distributed node name.",
+      )
+      io.println("Are you sure " <> primary_node <> " is correct?")
+      io.println("A proper node name should be like: node1@127.0.0.1")
+      primary_node
+    }
+  }
+
   // Join the cluster
-  case khepri_gleam_cluster.join(cluster, primary_node, 5000) {
+  case khepri_gleam_cluster.join(cluster, validated_node, 5000) {
     Ok(_) -> {
       io.println("Successfully joined the cluster!")
 
@@ -152,6 +237,11 @@ fn run_secondary_node(
     }
     Error(err) -> {
       io.println("Failed to join cluster: " <> string.inspect(err))
+      io.println("\nPossible reasons for failure:")
+      io.println("1. The primary node isn't running")
+      io.println("2. The node names are incorrect")
+      io.println("3. The cookie values don't match")
+      io.println("4. Network connectivity issues")
     }
   }
 
@@ -166,8 +256,21 @@ fn run_client_node(
   io.println("Running as CLIENT node")
   io.println("Joining primary node: " <> primary_node)
 
+  // Check if the primary node name contains @ character (proper distributed node)
+  let validated_node = case string.contains(primary_node, "@") {
+    True -> primary_node
+    False -> {
+      io.println(
+        "\nWARNING: The primary node name doesn't look like a distributed node name.",
+      )
+      io.println("Are you sure " <> primary_node <> " is correct?")
+      io.println("A proper node name should be like: node1@127.0.0.1")
+      primary_node
+    }
+  }
+
   // Join the cluster
-  case khepri_gleam_cluster.join(cluster, primary_node, 5000) {
+  case khepri_gleam_cluster.join(cluster, validated_node, 5000) {
     Ok(_) -> {
       io.println("Successfully joined the cluster!")
 
@@ -190,6 +293,11 @@ fn run_client_node(
     }
     Error(err) -> {
       io.println("Failed to join cluster: " <> string.inspect(err))
+      io.println("\nPossible reasons for failure:")
+      io.println("1. The primary node isn't running")
+      io.println("2. The node names are incorrect")
+      io.println("3. The cookie values don't match")
+      io.println("4. Network connectivity issues")
     }
   }
 
@@ -205,7 +313,7 @@ fn write_test_data() -> Nil {
     "/:cluster_test/vegetables/carrot",
   ]
 
-  // Store data at each path - using each instead of index_map for correct return type
+  // Store data at each path
   list.each(paths, fn(path) {
     let index = case path {
       "/:cluster_test/fruits/apple" -> 0
