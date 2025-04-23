@@ -1,90 +1,202 @@
 #!/bin/bash
-# run_khepri_node.sh - Script to run Khepri distributed nodes
+# khepri_cluster_test.sh - Improved script for testing Khepri clustering
 
-# Check arguments
-if [ $# -lt 1 ]; then
-  echo "Usage: $0 <role> [primary_node]"
-  echo "  role: primary, secondary, or client"
-  echo "  primary_node: required for secondary and client roles (e.g., node1@127.0.0.1)"
-  exit 1
-fi
+set -e  # Exit on error
 
-ROLE=$1
-PRIMARY_NODE=$2
+# Configuration
+COOKIE="khepri_test"
+HOST="$(hostname -s)"  # Get short hostname
+BASE_IP="127.0.0.1"
 
-# Ensure required secondary/client argument is provided
-if [[ "$ROLE" == "secondary" || "$ROLE" == "client" ]] && [ -z "$PRIMARY_NODE" ]; then
-  echo "Error: When using role '$ROLE', you must provide the primary_node parameter"
-  echo "Example: $0 $ROLE node1@127.0.0.1"
-  exit 1
-fi
+# Color output
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
 
-# Build the project first
-echo "Building project..."
-gleam build
+# Print usage information
+function print_usage {
+  echo -e "${BLUE}Khepri Cluster Test Script${NC}"
+  echo "Usage:"
+  echo "  $0 start <role> [primary_node]"
+  echo "  $0 start-all                 # Start primary, secondary and client nodes"
+  echo "  $0 stop-all                  # Stop all running nodes"
+  echo "  $0 status                    # Check status of running nodes"
+  echo ""
+  echo "Roles:"
+  echo "  primary                      # Start a primary node"
+  echo "  secondary <primary_node>     # Start a secondary node connected to primary"
+  echo "  client <primary_node>        # Start a client node connected to primary"
+  echo ""
+  echo "Examples:"
+  echo "  $0 start primary             # Start primary node"
+  echo "  $0 start secondary node1@$HOST  # Start secondary node"
+  echo "  $0 start-all                 # Start all three node types"
+}
 
-# Set up the node name based on role
-NODE_NAME=""
-case "$ROLE" in
-  "primary")
-    NODE_NAME="node1@127.0.0.1"
+# Start a single node
+function start_node {
+  local ROLE=$1
+  local PRIMARY_NODE=$2
+  local NODE_NAME=""
+  
+  # Determine node name based on role
+  case "$ROLE" in
+    "primary")
+      NODE_NAME="node1@$HOST"
+      ;;
+    "secondary")
+      NODE_NAME="node2@$HOST"
+      if [ -z "$PRIMARY_NODE" ]; then
+        echo -e "${RED}Error: When using role 'secondary', you must provide the primary_node parameter${NC}"
+        echo "Example: $0 start secondary node1@$HOST"
+        exit 1
+      fi
+      ;;
+    "client")
+      NODE_NAME="node3@$HOST"
+      if [ -z "$PRIMARY_NODE" ]; then
+        echo -e "${RED}Error: When using role 'client', you must provide the primary_node parameter${NC}"
+        echo "Example: $0 start client node1@$HOST"
+        exit 1
+      fi
+      ;;
+    *)
+      echo -e "${RED}Error: Unknown role '$ROLE'. Must be primary, secondary, or client.${NC}"
+      print_usage
+      exit 1
+      ;;
+  esac
+  
+  # Check if node is already running
+  if pgrep -f "name $NODE_NAME" > /dev/null; then
+    echo -e "${YELLOW}Node $NODE_NAME is already running${NC}"
+    return 0
+  fi
+  
+  # Start the node in the background
+  echo -e "${GREEN}Starting $ROLE node: $NODE_NAME${NC}"
+  
+  # Build the Erlang command
+  local CMD="erl -pa build/dev/erlang/*/ebin -pa build/dev/erlang/*/_gleam_artefacts"
+  CMD="$CMD -name $NODE_NAME -setcookie $COOKIE -detached"
+  
+  if [ "$ROLE" == "primary" ]; then
+    CMD="$CMD -eval 'khepri_direct_helper:start_node(\"$NODE_NAME\", \"$COOKIE\", \"$ROLE\", \"\").'"
+  else
+    CMD="$CMD -eval 'khepri_direct_helper:start_node(\"$NODE_NAME\", \"$COOKIE\", \"$ROLE\", \"$PRIMARY_NODE\").'"
+  fi
+  
+  # Execute the command
+  echo "Running: $CMD"
+  eval $CMD
+  
+  # Wait a bit for the node to initialize
+  sleep 2
+  
+  # Check if the node started successfully
+  if pgrep -f "name $NODE_NAME" > /dev/null; then
+    echo -e "${GREEN}✓ Node $NODE_NAME started successfully${NC}"
+  else
+    echo -e "${RED}✗ Failed to start node $NODE_NAME${NC}"
+    exit 1
+  fi
+}
+
+# Start all three types of nodes
+function start_all_nodes {
+  echo -e "${BLUE}Starting a complete Khepri cluster with three nodes...${NC}"
+  
+  # Start primary node
+  start_node "primary"
+  sleep 3  # Give primary node time to initialize
+  
+  # Start secondary node
+  start_node "secondary" "node1@$HOST"
+  sleep 2
+  
+  # Start client node
+  start_node "client" "node1@$HOST"
+  
+  echo -e "${GREEN}All nodes started. Cluster should be forming.${NC}"
+  echo "You can check the status with: $0 status"
+  echo "You can stop all nodes with: $0 stop-all"
+}
+
+# Stop all running nodes
+function stop_all_nodes {
+  echo -e "${BLUE}Stopping all Khepri cluster nodes...${NC}"
+  
+  # Find and kill all Erlang nodes with our cookie
+  local KILLED=0
+  for pid in $(pgrep -f "name node[1-3]@$HOST.*cookie $COOKIE"); do
+    local node_name=$(ps -p $pid -o args | grep -o "name node[1-3]@$HOST" | cut -d' ' -f2)
+    echo -e "${YELLOW}Stopping node $node_name (PID: $pid)${NC}"
+    kill $pid
+    KILLED=$((KILLED+1))
+  done
+  
+  if [ $KILLED -eq 0 ]; then
+    echo -e "${YELLOW}No running Khepri nodes found${NC}"
+  else
+    echo -e "${GREEN}Stopped $KILLED Khepri nodes${NC}"
+  fi
+}
+
+# Check status of running nodes
+function check_status {
+  echo -e "${BLUE}Checking status of Khepri cluster nodes...${NC}"
+  
+  local COUNT=0
+  for role in "primary" "secondary" "client"; do
+    local node_num=$((COUNT+1))
+    local node_name="node${node_num}@$HOST"
+    
+    if pgrep -f "name $node_name" > /dev/null; then
+      local pid=$(pgrep -f "name $node_name")
+      echo -e "${GREEN}✓ $role node $node_name is running (PID: $pid)${NC}"
+    else
+      echo -e "${YELLOW}✗ $role node $node_name is not running${NC}"
+    fi
+    
+    COUNT=$((COUNT+1))
+  done
+  
+  # Try to get more detailed status using Erlang remote calls, if possible
+  if pgrep -f "name node1@$HOST" > /dev/null; then
+    echo -e "\n${BLUE}Attempting to get cluster status from primary node...${NC}"
+    erl -name status_check@$HOST -setcookie $COOKIE -noshell \
+        -eval "rpc:call('node1@$HOST', io, format, [\"Remote call successful~n\"]), 
+               io:format(\"Cluster members: ~p~n\", [rpc:call('node1@$HOST', khepri_cluster, members, [])]),
+               io:format(\"Cluster nodes: ~p~n\", [rpc:call('node1@$HOST', khepri_cluster, nodes, [])]),
+               init:stop()."
+  fi
+}
+
+# Main script logic
+case "$1" in
+  "start")
+    if [ -z "$2" ]; then
+      echo -e "${RED}Error: Missing role parameter${NC}"
+      print_usage
+      exit 1
+    fi
+    start_node "$2" "$3"
     ;;
-  "secondary")
-    NODE_NAME="node2@127.0.0.1"
+  "start-all")
+    start_all_nodes
     ;;
-  "client")
-    NODE_NAME="node3@127.0.0.1"
+  "stop-all")
+    stop_all_nodes
+    ;;
+  "status")
+    check_status
     ;;
   *)
-    echo "Error: Unknown role '$ROLE'. Must be primary, secondary, or client."
+    print_usage
     exit 1
     ;;
 esac
 
-# Create a temporary file to hold our Erlang initialization code
-TEMP_FILE=$(mktemp)
-trap "rm -f $TEMP_FILE" EXIT
-
-# Start khepri_multi_node with the given arguments
-if [[ "$ROLE" == "primary" ]]; then
-  cat > $TEMP_FILE <<EOF
-io:format("Starting Khepri node with role: $ROLE~n"),
-case file:consult("$TEMP_FILE.args") of
-    {ok, [Args]} ->
-        khepri_multi_node:main_0();
-    _ ->
-        io:format("Failed to read arguments~n")
-end.
-EOF
-  # Store the arguments for Gleam
-  echo "[\"$ROLE\"]." > $TEMP_FILE.args
-else
-  cat > $TEMP_FILE <<EOF
-io:format("Starting Khepri node with role: $ROLE~n"),
-case file:consult("$TEMP_FILE.args") of
-    {ok, [Args]} ->
-        khepri_multi_node:main_0();
-    _ ->
-        io:format("Failed to read arguments~n")
-end.
-EOF
-  # Store the arguments for Gleam
-  echo "[\"$ROLE\", \"$PRIMARY_NODE\"]." > $TEMP_FILE.args
-fi
-
-# Start the Erlang node with distribution enabled
-echo "Starting Erlang node: $NODE_NAME"
-echo "Role: $ROLE"
-if [[ "$ROLE" != "primary" ]]; then
-  echo "Connecting to primary node: $PRIMARY_NODE"
-fi
-
-# Run Erlang with the correct distribution settings and our initialization code
-erl -pa build/dev/erlang/*/ebin -pa build/dev/erlang/*/_gleam_artefacts \
-    -name $NODE_NAME \
-    -setcookie khepri_test \
-    -noshell \
-    -eval "case file:script(\"$TEMP_FILE\") of ok -> ok; _ -> init:stop(1) end."
-
-# If we get here, something went wrong
-echo "Node terminated."
+exit 0

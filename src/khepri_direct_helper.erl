@@ -1,245 +1,128 @@
-%% Fixed khepri_direct_helper.erl with proper variable safety
+%% src/khepri_direct_helper.erl
 -module(khepri_direct_helper).
--export([start_node/4]).
+-export([start_node/4, node_info/0]).
 
-%% Start a node with direct function calls to bypass Gleam argument parsing
+%% Start a node with the given distribution parameters and role
 start_node(Name, Cookie, Role, PrimaryNode) ->
     io:format("Starting distributed node: ~s~n", [Name]),
     io:format("Using cookie: ~s~n", [Cookie]),
     io:format("Role: ~s~n", [Role]),
     
-    % Start distribution
-    NodeAtom = list_to_atom(Name),
-    CookieAtom = list_to_atom(Cookie),
-    
-    % Determine name type
-    NameType = case string:find(Name, ".") of
-        nomatch -> shortnames;
-        _ -> longnames
-    end,
-    
-    io:format("Using name type: ~p~n", [NameType]),
-    
-    % Start distribution
-    case net_kernel:start([NodeAtom, NameType]) of
-        {ok, _} -> 
-            erlang:set_cookie(node(), CookieAtom),
-            io:format("Distribution started successfully~n");
-        {error, {already_started, _}} ->
-            erlang:set_cookie(node(), CookieAtom),
-            io:format("Distribution already started~n");
-        Error ->
-            io:format("Failed to start distribution: ~p~n", [Error]),
-            throw({distribution_error, Error})
-    end,
-    
     % Start Khepri
     io:format("Starting Khepri...~n"),
-    khepri:start(),
+    Result = case khepri:start() of
+        {ok, StoreId} -> 
+            io:format("Khepri started successfully with store ID: ~p~n", [StoreId]),
+            {ok, StoreId};
+        Error -> 
+            io:format("Error starting Khepri: ~p~n", [Error]),
+            Error
+    end,
     
-    % Start the Khepri cluster
-    io:format("Starting Khepri cluster as ~s node~n", [Role]),
-    
-    % Run appropriate function based on role
+    % Additional logic based on role
     case Role of
         "primary" ->
-            run_primary();
+            io:format("Running as primary node~n"),
+            % Store some test data
+            Path = [<<"test">>, <<"data">>],
+            Value = <<"test_value_from_primary">>,
+            khepri:put(Path, Value),
+            io:format("Stored test data at /test/data~n"),
+            % Print node info
+            node_info(),
+            % Store more structured test data
+            store_test_data();
         "secondary" ->
-            run_secondary(PrimaryNode);
+            io:format("Running as secondary node~n"),
+            io:format("Joining primary node: ~s~n", [PrimaryNode]),
+            % Join the cluster with retries
+            join_primary(PrimaryNode, 5),
+            % Print node info
+            node_info();
         "client" ->
-            run_client(PrimaryNode);
-        _ ->
-            io:format("Unknown role: ~s~n", [Role])
+            io:format("Running as client node~n"),
+            io:format("Connecting to primary node: ~s~n", [PrimaryNode]),
+            % Just connect and read data
+            case connect_to_primary(PrimaryNode, 5) of
+                ok ->
+                    % Try to read data from the cluster
+                    read_test_data();
+                error ->
+                    io:format("Failed to connect to the cluster~n")
+            end
     end,
     
-    % Keep the node running
     io:format("Node is running. Press Ctrl+C to stop.~n"),
-    timer:sleep(infinity).
+    
+    % Return result of Khepri start
+    Result.
 
-%% Run primary node
-run_primary() ->
-    % Wait for leader election
-    io:format("Waiting for leader election...~n"),
-    ok = khepri_cluster:wait_for_leader(),
-    io:format("Leader election completed~n"),
+%% Get information about the current node
+node_info() ->
+    NodeName = node(),
+    Nodes = nodes(),
+    io:format("Current node: ~p~n", [NodeName]),
+    io:format("Connected nodes: ~p~n", [Nodes]),
     
-    % Store some test data
-    write_test_data(),
-    
-    % Print cluster status
-    print_cluster_status(),
-    
-    % Read test data to confirm it was stored
-    read_test_data().
-
-%% Run secondary node
-run_secondary(PrimaryNode) ->
-    io:format("Joining primary node: ~s~n", [PrimaryNode]),
-    
-    % Join the cluster
-    case khepri_cluster:join(list_to_atom(PrimaryNode)) of
-        ok ->
-            io:format("Successfully joined the cluster!~n"),
-            
-            % Print cluster status
-            print_cluster_status(),
-            
-            % Read data from the cluster
-            io:format("~nReading data from the cluster:~n"),
-            read_test_data(),
-            
-            % Write some data
-            io:format("~nWriting data to the cluster:~n"),
-            write_secondary_data();
-        {error, JoinError} ->
-            io:format("Failed to join cluster: ~p~n", [JoinError]),
-            io:format("~nPossible reasons for failure:~n"),
-            io:format("1. The primary node isn't running~n"),
-            io:format("2. The node names are incorrect~n"),
-            io:format("3. The cookie values don't match~n"),
-            io:format("4. Network connectivity issues~n")
-    end.
-
-%% Run client node
-run_client(PrimaryNode) ->
-    io:format("Connecting to primary node: ~s~n", [PrimaryNode]),
-    
-    % Join the cluster
-    case khepri_cluster:join(list_to_atom(PrimaryNode)) of
-        ok ->
-            io:format("Successfully joined the cluster!~n"),
-            
-            % Print cluster status
-            print_cluster_status(),
-            
-            % Read all data
-            io:format("~nReading data from the cluster:~n"),
-            read_test_data(),
-            read_secondary_data(),
-            
-            % Write client data
-            write_client_data(),
-            
-            % Read again to verify
-            io:format("~nReading all data after updates:~n"),
-            read_test_data(),
-            read_secondary_data(),
-            read_client_data();
-        {error, JoinError} ->
-            io:format("Failed to join cluster: ~p~n", [JoinError])
-    end.
-
-%% Print cluster status (directly using khepri_cluster module)
-print_cluster_status() ->
-    io:format("~nCluster status:~n"),
-    
-    % Get cluster members - fixed variable safety
-    case khepri_cluster:members() of
-        {ok, Members} ->
-            io:format("  Members: ~p~n", [Members]);
-        {error, _} -> 
-            % Using just underscore to ignore variable entirely
-            io:format("  Failed to get members~n")
-    end,
-    
-    % Get cluster nodes - fixed variable safety
-    case khepri_cluster:nodes() of
-        {ok, Nodes} ->
-            io:format("  Nodes: ~p~n", [Nodes]);
-        {error, _} -> 
-            % Using just underscore to ignore variable entirely
-            io:format("  Failed to get nodes~n")
-    end.
-
-%% Helper functions for data operations - DIRECT KHEPRI CALLS
-
-write_test_data() ->
-    io:format("~nWriting test data to the cluster...~n"),
-    
-    % Create paths using binary strings for Khepri
-    Paths = [
-        [<<"cluster_test">>, <<"fruits">>, <<"apple">>],
-        [<<"cluster_test">>, <<"fruits">>, <<"banana">>],
-        [<<"cluster_test">>, <<"vegetables">>, <<"carrot">>]
-    ],
-    
-    lists:foreach(fun(Path) ->
-        % Create value based on the path
-        Value = case Path of
-            [_, _, <<"apple">>] -> <<"primary_value_0">>;
-            [_, _, <<"banana">>] -> <<"primary_value_1">>;
-            _ -> <<"primary_value_2">>
+    % Get Khepri info if available
+    try
+        case khepri_cluster:members() of
+            {ok, Members} -> 
+                io:format("Khepri cluster members: ~p~n", [Members]);
+            Error -> 
+                io:format("Failed to get cluster members: ~p~n", [Error])
         end,
         
+        case khepri_cluster:nodes() of
+            {ok, KNodes} -> 
+                io:format("Khepri cluster nodes: ~p~n", [KNodes]);
+            Error2 -> 
+                io:format("Failed to get cluster nodes: ~p~n", [Error2])
+        end,
+        ok
+    catch
+        E:R:ST ->
+            io:format("Error getting Khepri info: ~p:~p~n", [E, R]),
+            io:format("Stack trace: ~p~n", [ST]),
+            error
+    end.
+
+%% Store structured test data for the cluster
+store_test_data() ->
+    io:format("Storing structured test data...~n"),
+    % Create some test paths with data
+    Paths = [
+        {[<<"cluster_test">>, <<"fruits">>, <<"apple">>], <<"primary_value_0">>},
+        {[<<"cluster_test">>, <<"fruits">>, <<"banana">>], <<"primary_value_1">>},
+        {[<<"cluster_test">>, <<"vegetables">>, <<"carrot">>], <<"primary_value_2">>}
+    ],
+    
+    % Store each item
+    lists:foreach(fun({Path, Value}) ->
         % Format path for display
         PathStr = format_path(Path),
         io:format("Writing: ~s = ~s~n", [PathStr, Value]),
-        
-        % Write directly to Khepri (not through Gleam)
+        % Store in Khepri
         khepri:put(Path, Value)
     end, Paths).
 
-write_secondary_data() ->
-    Path = [<<"cluster_test">>, <<"secondary">>, <<"data">>],
-    Value = <<"secondary_node_data">>,
-    
-    PathStr = format_path(Path),
-    io:format("Writing: ~s = ~s~n", [PathStr, Value]),
-    
-    khepri:put(Path, Value).
-
-write_client_data() ->
-    Path = [<<"cluster_test">>, <<"client">>, <<"data">>],
-    Value = <<"client_node_data">>,
-    
-    PathStr = format_path(Path),
-    io:format("~nWriting client data: ~s = ~s~n", [PathStr, Value]),
-    
-    khepri:put(Path, Value).
-
+%% Read test data from the cluster
 read_test_data() ->
-    io:format("Reading primary node test data:~n"),
-    
-    Paths = [
-        [<<"cluster_test">>, <<"fruits">>, <<"apple">>],
-        [<<"cluster_test">>, <<"fruits">>, <<"banana">>],
-        [<<"cluster_test">>, <<"vegetables">>, <<"carrot">>]
-    ],
-    
-    lists:foreach(fun(Path) ->
-        PathStr = format_path(Path),
-        case khepri:get(Path) of
-            {ok, Value} -> 
-                io:format("  ~s = ~p~n", [PathStr, Value]);
-            {error, GetError} -> 
-                io:format("  ~s = ERROR: ~p~n", [PathStr, GetError])
-        end
-    end, Paths).
+    io:format("Reading test data from the cluster:~n"),
+    % Try to read both simple and structured data
+    try_read_path([<<"test">>, <<"data">>]),
+    try_read_path([<<"cluster_test">>, <<"fruits">>, <<"apple">>]),
+    try_read_path([<<"cluster_test">>, <<"fruits">>, <<"banana">>]),
+    try_read_path([<<"cluster_test">>, <<"vegetables">>, <<"carrot">>]).
 
-read_secondary_data() ->
-    io:format("Reading secondary node data:~n"),
-    
-    Path = [<<"cluster_test">>, <<"secondary">>, <<"data">>],
+%% Try to read data at a path
+try_read_path(Path) ->
     PathStr = format_path(Path),
-    
     case khepri:get(Path) of
-        {ok, Value} -> 
+        {ok, Value} ->
             io:format("  ~s = ~p~n", [PathStr, Value]);
-        {error, GetError} -> 
-            io:format("  ~s = ERROR: ~p~n", [PathStr, GetError])
-    end.
-
-read_client_data() ->
-    io:format("Reading client node data:~n"),
-    
-    Path = [<<"cluster_test">>, <<"client">>, <<"data">>],
-    PathStr = format_path(Path),
-    
-    case khepri:get(Path) of
-        {ok, Value} -> 
-            io:format("  ~s = ~p~n", [PathStr, Value]);
-        {error, GetError} -> 
-            io:format("  ~s = ERROR: ~p~n", [PathStr, GetError])
+        {error, Reason} ->
+            io:format("  ~s = ERROR: ~p~n", [PathStr, Reason])
     end.
 
 %% Format a path for display
@@ -250,3 +133,76 @@ format_path(Path) ->
                           io_lib:format("~p", [Part])
                       end, Path),
     "/" ++ string:join([":" ++ P || P <- Parts], "/").
+
+%% Connect to primary node with retries
+connect_to_primary(PrimaryNode, Retries) ->
+    io:format("Connecting to primary node ~s (attempts left: ~p)~n", [PrimaryNode, Retries]),
+    try
+        PrimaryAtom = list_to_atom(PrimaryNode),
+        case net_kernel:connect_node(PrimaryAtom) of
+            true ->
+                io:format("Successfully connected to primary node!~n"),
+                ok;
+            false when Retries > 0 ->
+                io:format("Failed to connect, retrying in 2 seconds...~n"),
+                timer:sleep(2000),
+                connect_to_primary(PrimaryNode, Retries - 1);
+            false ->
+                io:format("Failed to connect after all retries~n"),
+                error
+        end
+    catch
+        E:R:ST ->
+            io:format("Error connecting to primary: ~p:~p~n", [E, R]),
+            io:format("Stack trace: ~p~n", [ST]),
+            case Retries > 0 of
+                true ->
+                    io:format("Retrying in 2 seconds...~n"),
+                    timer:sleep(2000),
+                    connect_to_primary(PrimaryNode, Retries - 1);
+                false ->
+                    io:format("Failed to connect after all retries~n"),
+                    error
+            end
+    end.
+
+%% Join Khepri cluster with retries
+join_primary(PrimaryNode, Retries) ->
+    % First ensure we're connected
+    case connect_to_primary(PrimaryNode, Retries) of
+        ok ->
+            try_join_cluster(list_to_atom(PrimaryNode), Retries);
+        error ->
+            io:format("Cannot join cluster without connection to primary~n")
+    end.
+
+%% Try to join Khepri cluster
+try_join_cluster(PrimaryAtom, Retries) ->
+    io:format("Joining Khepri cluster via ~p (attempts left: ~p)~n", [PrimaryAtom, Retries]),
+    try
+        case khepri_cluster:join(PrimaryAtom) of
+            ok -> 
+                io:format("Successfully joined the Khepri cluster!~n"),
+                % Try reading data to verify
+                timer:sleep(1000), % Give cluster time to sync
+                read_test_data();
+            {error, Reason} when Retries > 0 ->
+                io:format("Failed to join cluster: ~p, retrying in 2 seconds...~n", [Reason]),
+                timer:sleep(2000),
+                try_join_cluster(PrimaryAtom, Retries - 1);
+            {error, Reason} ->
+                io:format("Failed to join cluster after all retries: ~p~n", [Reason])
+        end
+    catch
+        E:R:ST ->
+            io:format("Error joining cluster: ~p:~p~n", [E, R]),
+            io:format("Stack trace: ~p~n", [ST]),
+            case Retries > 0 of
+                true ->
+                    io:format("Retrying in 2 seconds...~n"),
+                    timer:sleep(2000),
+                    try_join_cluster(PrimaryAtom, Retries - 1);
+                false ->
+                    io:format("Failed to join after all retries~n")
+            end
+    end.
