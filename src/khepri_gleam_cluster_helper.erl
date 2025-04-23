@@ -128,40 +128,51 @@ stop_store_with_name(StoreId) ->
 %% Cluster Management Functions
 %% -----------------------------------------------
 
-%% In khepri_gleam_cluster_helper.erl - replace join_cluster function with this:
+%% Join a remote cluster with improved error handling
 join_cluster(RemoteNode) ->
     try
-        io:format("DEBUG: Trying to join node: ~p~n", [RemoteNode]),
+        io:format("DEBUG: Attempting to join node: ~p~n", [RemoteNode]),
         
-        % Sanitize node name - handle special characters and validate format
+        %% First validate node name format
         case string:find(RemoteNode, "@") of
             nomatch ->
                 {error, "Invalid node name format: missing '@' character"};
             _ ->
-                % Now try creating the atom safely
-                try
-                    RemoteNodeAtom = list_to_existing_atom(RemoteNode),
-                    io:format("DEBUG: Converting using existing atom: ~p~n", [RemoteNodeAtom]),
-                    do_join_cluster(RemoteNodeAtom)
-                catch
-                    error:badarg ->
-                        % The atom doesn't exist yet, try to create it
-                        try
-                            RemoteNodeAtom = list_to_atom(RemoteNode),
-                            io:format("DEBUG: Successfully converted to atom: ~p~n", [RemoteNodeAtom]),
-                            do_join_cluster(RemoteNodeAtom)
-                        catch
-                            error:E ->
-                                {error, io_lib:format("Cannot convert node name to atom: ~p", [E])}
-                        end
-                end
+                join_with_validated_name(RemoteNode)
         end
     catch
         Type:Error:Stack ->
-            io:format("DEBUG: Exception joining node: ~p:~p~n~p~n", [Type, Error, Stack]),
+            io:format("DEBUG: Exception joining node: ~p:~p~n", [Type, Error, Stack]),
             {error, io_lib:format("Exception in join_cluster: ~p", [Error])}
     end.
 
+%% Helper function to handle name conversion and joining
+join_with_validated_name(RemoteNode) ->
+    %% Try to safely convert to atom 
+    NodeAtom = case catch(list_to_existing_atom(RemoteNode)) of
+        {'EXIT', _} ->
+            %% Atom doesn't exist yet, create it
+            list_to_atom(RemoteNode);
+        ExistingAtom ->
+            ExistingAtom
+    end,
+    
+    %% Now try to connect and join
+    io:format("DEBUG: Converted to atom: ~p~n", [NodeAtom]),
+    case net_kernel:connect_node(NodeAtom) of
+        true ->
+            io:format("DEBUG: Successfully connected to node~n"),
+            case khepri_cluster:join(NodeAtom) of
+                ok -> 
+                    io:format("DEBUG: Successfully joined Khepri cluster~n"),
+                    {ok, nil};
+                {error, Reason} -> 
+                    io:format("DEBUG: Failed to join Khepri cluster: ~p~n", [Reason]),
+                    {error, io_lib:format("Failed to join Khepri: ~p", [Reason])}
+            end;
+        false ->
+            {error, "Failed to connect to node. Check that it's running and using the same cookie"}
+    end.
 % Helper function to perform the actual joining
 do_join_cluster(NodeAtom) ->
     % First try to ping the node

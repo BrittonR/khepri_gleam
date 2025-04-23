@@ -11,6 +11,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
+import gleam/string
 
 /// Error that can occur when connecting to a node
 pub type NodeConnectError {
@@ -257,6 +258,13 @@ pub fn stop(
   process.try_call(cluster, Stop, timeout)
 }
 
+fn validate_node_name(node_name: String) -> Result(String, String) {
+  case string.contains(node_name, "@") {
+    True -> Ok(node_name)
+    False -> Error("Invalid node name format: missing '@' character")
+  }
+}
+
 /// Wait for a leader to be elected in the cluster
 ///
 /// ## Parameters
@@ -284,18 +292,34 @@ fn handle_message(
       // Log the join attempt
       state.logger("info", "Attempting to join node: " <> node_name)
 
-      // Try to join the node
-      case join_cluster_raw(node_name) {
-        Ok(_) -> {
-          // Successfully joined
-          state.logger("info", "Successfully joined node: " <> node_name)
-          process.send(client, Ok(Nil))
+      // Validate node name first
+      case validate_node_name(node_name) {
+        Ok(valid_name) -> {
+          // Try to join the node
+          case join_cluster_raw(valid_name) {
+            Ok(_) -> {
+              // Successfully joined
+              state.logger("info", "Successfully joined node: " <> valid_name)
+              process.send(client, Ok(Nil))
+            }
+            Error(err) -> {
+              // Failed to join
+              state.logger(
+                "error",
+                "Failed to join node: " <> valid_name <> " - " <> err,
+              )
+              process.send(
+                client,
+                Error(NodeConnectError(node: valid_name, error: err)),
+              )
+            }
+          }
         }
         Error(err) -> {
-          // Failed to join
+          // Node name validation failed
           state.logger(
             "error",
-            "Failed to join node: " <> node_name <> " - " <> err,
+            "Invalid node name: " <> node_name <> " - " <> err,
           )
           process.send(
             client,
