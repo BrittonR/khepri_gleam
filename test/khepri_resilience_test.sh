@@ -111,6 +111,8 @@ function start_primary {
 }
 
 # Start the secondary node
+# Start the secondary node with improved joining logic
+# Start the secondary node with complete reset before joining
 function start_secondary {
     echo -e "${BLUE}Starting secondary node...${NC}"
     
@@ -127,65 +129,126 @@ function start_secondary {
         sleep 2
     fi
     
-    # Clear log file
+    # Create log file
     echo "===== Secondary Node Log - $(date) =====" > logs/secondary.log
     
-    # Start node
+    # Start node with reset before joining
     erl -pa build/dev/erlang/*/ebin -pa build/dev/erlang/*/_gleam_artefacts \
         -sname node2 \
         -setcookie khepri_test \
         -noinput \
         -eval "
-            io:format(\"Starting Khepri on secondary node~n\"),
-            case khepri:start() of
-                {ok, StoreId} -> 
-                    io:format(\"Khepri started with ID: ~p~n\", [StoreId]),
-                    io:format(\"Secondary node running on ~p~n\", [node()]),
-                    io:format(\"Connecting to primary node~n\"),
+            io:format(\"Starting secondary node on ~p~n\", [node()]),
+            
+            % Make sure node1 is reachable
+            PrimaryNode = 'node1@$HOST',
+            case net_kernel:connect_node(PrimaryNode) of
+                true ->
+                    io:format(\"Successfully connected to ~p~n\", [PrimaryNode]),
                     
-                    % Try to connect to primary
-                    PrimaryNode = 'node1@$HOST',
-                    io:format(\"Trying to connect to ~p~n\", [PrimaryNode]),
-                    case net_kernel:connect_node(PrimaryNode) of
-                        true ->
-                            io:format(\"Connected to primary node~n\"),
-                            case khepri_cluster:join(PrimaryNode) of
-                                ok -> 
-                                    io:format(\"Successfully joined Khepri cluster!~n\"),
-                                    timer:sleep(infinity);
-                                {error, JoinError} ->
-                                    io:format(\"Failed to join Khepri cluster: ~p~n\", [JoinError]),
-                                    timer:sleep(infinity)
+                    % First start Khepri with default settings
+                    io:format(\"Starting Khepri...~n\"),
+                    case khepri:start() of
+                        {ok, StoreId} -> 
+                            io:format(\"Khepri started with ID: ~p~n\", [StoreId]),
+                            
+                            % CRITICAL: Reset the node completely before joining
+                            io:format(\"Stopping Khepri app for reset...~n\"),
+                            application:stop(khepri),
+                            timer:sleep(1000),
+                            
+                            io:format(\"Resetting Khepri node state...~n\"),
+                            khepri_cluster:reset(),
+                            timer:sleep(2000),
+                            
+                            % Restart Khepri after reset
+                            io:format(\"Restarting Khepri after reset...~n\"),
+                            case khepri:start() of
+                                {ok, _} ->
+                                    io:format(\"Khepri restarted successfully~n\"),
+                                    % Now try to join the cluster with retry logic
+                                    JoinCluster = fun F(Retries) ->
+                                        io:format(\"Join attempt ~p: Joining ~p~n\", [6-Retries, PrimaryNode]),
+                                        try
+                                            % First wait for leader election on primary
+                                            io:format(\"Waiting for leader election on primary...~n\"),
+                                            rpc:call(PrimaryNode, khepri_cluster, wait_for_leader, []),
+                                            
+                                            io:format(\"Joining the Khepri cluster...~n\"),
+                                            case khepri_cluster:join(PrimaryNode) of
+                                                ok -> 
+                                                    io:format(\"Successfully joined the cluster!~n\"),
+                                                    
+                                                    % Wait for membership to propagate
+                                                    timer:sleep(2000),
+                                                    
+                                                    % Verify we're in the cluster
+                                                    io:format(\"Verifying membership...~n\"),
+                                                    {ok, Members} = khepri_cluster:members(),
+                                                    io:format(\"Current members: ~p~n\", [Members]),
+                                                    MyNode = node(),
+                                                    IsMember = lists:any(
+                                                        fun({_, N}) -> N =:= MyNode end, 
+                                                        Members),
+                                                    case IsMember of
+                                                        true -> 
+                                                            io:format(\"VERIFIED: Node is in the cluster!~n\"),
+                                                            ok;
+                                                        false ->
+                                                            io:format(\"WARNING: Node not showing in members list~n\"),
+                                                            throw({error, not_in_members})
+                                                    end;
+                                                {error, Reason} ->
+                                                    io:format(\"Join failed: ~p~n\", [Reason]),
+                                                    throw({error, Reason})
+                                            end
+                                        catch
+                                            _:Error when Retries > 1 ->
+                                                io:format(\"Error: ~p. Retrying in 3 seconds...~n\", [Error]),
+                                                timer:sleep(3000),
+                                                F(Retries - 1);
+                                            _:FinalError ->
+                                                io:format(\"Failed after all retries: ~p~n\", [FinalError]),
+                                                {error, FinalError}
+                                        end
+                                    end,
+                                    
+                                    % Try joining with 5 retry attempts
+                                    JoinResult = JoinCluster(5),
+                                    io:format(\"Final join result: ~p~n\", [JoinResult]);
+                                Error ->
+                                    io:format(\"Failed to restart Khepri: ~p~n\", [Error])
                             end;
-                        false ->
-                            io:format(\"Failed to connect to primary node~n\"),
-                            timer:sleep(infinity)
+                        Error -> 
+                            io:format(\"Failed to start Khepri: ~p~n\", [Error])
                     end;
-                Error -> 
-                    io:format(\"Failed to start Khepri: ~p~n\", [Error]),
-                    timer:sleep(5000),
-                    init:stop(1)
-            end.
+                false ->
+                    io:format(\"Failed to connect to primary node ~p~n\", [PrimaryNode])
+            end,
+            
+            % Keep the node running
+            io:format(\"Secondary node running...~n\"),
+            timer:sleep(infinity).
         " >> logs/secondary.log 2>&1 &
     
     # Wait for node to start
     sleep 3
     
-    # Check if node started successfully
+    # Check if node started successfully 
     if is_node_running "node2"; then
         echo -e "${GREEN}✓ Secondary node started successfully${NC}"
-        echo -e "${BLUE}Waiting for cluster join to complete...${NC}"
+        echo -e "${BLUE}Waiting for cluster join to complete (20 seconds)...${NC}"
         
-        # Wait a bit longer for joining to complete
-        for i in {1..10}; do
+        # Wait longer to allow the join process to complete
+        for i in {1..20}; do
             echo -n "."
             sleep 1
         done
         echo ""
         
-        # Show last few log lines
-        echo -e "${BLUE}Last few log lines:${NC}"
-        tail -n 10 logs/secondary.log
+        # Show the logs with diagnostics
+        echo -e "${BLUE}Secondary node joining logs:${NC}"
+        grep -E "join|membership|cluster|error|warning|success" logs/secondary.log | tail -n 15
     else
         echo -e "${RED}✗ Failed to start secondary node${NC}"
         echo -e "${RED}Log file:${NC}"
@@ -279,6 +342,8 @@ function start_tertiary {
 }
 
 # Check cluster status with leader information - FIXED VERSION
+# Check cluster status with leader information - IMPROVED VERSION
+# Check cluster status with leader information - FIXED VERSION
 function check_status {
     echo -e "${BLUE}Checking cluster status...${NC}"
     
@@ -297,7 +362,7 @@ function check_status {
     # Create a log file for the checker
     echo "===== Status Check Log - $(date) =====" > logs/status.log
     
-    # Start a temporary node to check status with FIXED leader information code
+    # Start a temporary node to check status with FIXED leader detection
     erl -pa build/dev/erlang/*/ebin -pa build/dev/erlang/*/_gleam_artefacts \
         -sname $CHECKER_NAME \
         -setcookie khepri_test \
@@ -324,7 +389,8 @@ function check_status {
                     io:format(\"Failed to connect to any node in the cluster~n\");
                 Node ->
                     io:format(\"Connected to node ~p~n\", [Node]),
-                    % Get connected nodes
+                    
+                    % Get connected nodes and cluster info
                     Nodes = rpc:call(Node, erlang, nodes, []),
                     io:format(\"Connected nodes: ~p~n\", [Nodes]),
                     
@@ -335,41 +401,76 @@ function check_status {
                         {ok, KhepriNodes} = rpc:call(Node, khepri_cluster, nodes, []),
                         io:format(\"Khepri cluster nodes: ~p~n\", [KhepriNodes]),
                         
-                        % Check for leader using Ra directly
-                        % Ra is the underlying Raft consensus implementation used by Khepri
-                        io:format(\"~nChecking for cluster leader...~n\"),
+                        % Determine leader using performance metrics
+                        io:format(\"~nAttempting to determine leader with performance tests:~n\"),
+                        LeaderTests = lists:map(
+                            fun(KNode) ->
+                                io:format(\"Testing node ~p~n\", [KNode]),
+                                
+                                % Try a series of write operations and measure latency
+                                TotalWrites = 5,
+                                WriteTimes = lists:map(
+                                    fun(_) ->
+                                        WriteKey = io_lib:format(\"leader_test_~p\", [erlang:system_time(millisecond)]),
+                                        WriteTime = erlang:system_time(millisecond),
+                                        WriteResult = rpc:call(KNode, khepri, put, 
+                                                             [[list_to_binary(\"leader_test\")], 
+                                                              list_to_binary(WriteKey)]),
+                                        WriteLatency = erlang:system_time(millisecond) - WriteTime,
+                                        {WriteResult, WriteLatency}
+                                    end,
+                                    lists:seq(1, TotalWrites)
+                                ),
+                                
+                                % Calculate average write latency
+                                SuccessfulWrites = [Latency || {ok, Latency} <- WriteTimes],
+                                case length(SuccessfulWrites) of
+                                    0 -> 
+                                        io:format(\"  Node ~p had no successful writes~n\", [KNode]),
+                                        {KNode, undefined, false};
+                                    Count -> 
+                                        AvgLatency = lists:sum(SuccessfulWrites) / Count,
+                                        io:format(\"  Node ~p average write latency: ~.2fms (~p successful of ~p)~n\", 
+                                                [KNode, AvgLatency, Count, TotalWrites]),
+                                        {KNode, AvgLatency, true}
+                                end
+                            end,
+                            KhepriNodes
+                        ),
                         
-                        % Try an alternative approach using Ra server_info
-                        ClusterName = khepri,
-                        try
-                            % Get Ra server info from the connected node
-                            ServerInfo = rpc:call(Node, ra, server_info, [ClusterName]),
-                            io:format(\"Ra server info: ~p~n\", [ServerInfo]),
-                            
-                            % Try to extract leader info from each node
-                            lists:foreach(
-                                fun(KNode) ->
-                                    % Note: KNode is already an atom here, no conversion needed
-                                    io:format(\"Checking status of ~p~n\", [KNode]),
-                                    Result = rpc:call(KNode, ra, info, [ClusterName]),
-                                    case Result of
-                                        {ok, Info} ->
-                                            % Try to extract leader info
-                                            Leader = proplists:get_value(leader, Info, undefined),
-                                            State = proplists:get_value(state, Info, undefined),
-                                            io:format(\"  Node: ~p, State: ~p, Leader: ~p~n\", 
-                                                    [KNode, State, Leader]);
-                                        Error ->
-                                            io:format(\"  Error querying ~p: ~p~n\", [KNode, Error])
-                                    end
-                                end,
-                                KhepriNodes
-                            )
-                        catch
-                            ErrorType:ErrorReason:Stacktrace ->
-                                io:format(\"Error calling Ra API: ~p:~p~n\", [ErrorType, ErrorReason]),
-                                io:format(\"Stack trace: ~p~n\", [Stacktrace])
-                        end
+                        % Sort by latency (faster nodes first) and filter out failed nodes
+                        ValidNodes = [{KNode, Latency} || {KNode, Latency, true} <- LeaderTests, Latency =/= undefined],
+                        SortedNodes = lists:sort(
+                            fun({_, L1}, {_, L2}) -> L1 =< L2 end, 
+                            ValidNodes
+                        ),
+                        
+                        case SortedNodes of
+                            [] -> 
+                                io:format(\"No nodes could complete write operations~n\");
+                            [{FastestNode, Latency}|_] ->
+                                io:format(\"~n=> Most likely leader is ~p (avg latency: ~.2fms)~n\", 
+                                         [FastestNode, Latency])
+                        end,
+                        
+                        % Test read latency from all nodes
+                        io:format(\"~nChecking read latencies:~n\"),
+                        timer:sleep(1000), % Give cluster time to sync
+                        lists:foreach(
+                            fun(KNode) ->
+                                ReadTime = erlang:system_time(millisecond),
+                                ReadResult = rpc:call(KNode, khepri, get, [[list_to_binary(\"leader_test\")]]),
+                                ReadLatency = erlang:system_time(millisecond) - ReadTime,
+                                case ReadResult of
+                                    {ok, Value} -> 
+                                        io:format(\"  ~p read latency: ~pms (found: ~p)~n\", 
+                                                [KNode, ReadLatency, Value]);
+                                    Error ->
+                                        io:format(\"  ~p read failed: ~p~n\", [KNode, Error])
+                                end
+                            end,
+                            KhepriNodes
+                        )
                     catch
                         E:R:ST -> 
                             io:format(\"Error getting cluster info: ~p:~p~n\", [E, R]),
@@ -380,7 +481,7 @@ function check_status {
         " > logs/status.log 2>&1
     
     # Wait for status check to complete
-    sleep 2
+    sleep 3
     
     # Display the status results
     cat logs/status.log
