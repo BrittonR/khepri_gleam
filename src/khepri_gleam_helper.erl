@@ -64,6 +64,8 @@ register_parent_paths(Path) ->
     register_parent_paths(ParentPath).
 
 %% Enhanced put function with proper path handling
+%% In khepri_gleam_helper.erl, modify the put_with_path function
+
 put_with_path(Path, Data) ->
     io:format("Putting data at path: ~p~n", [Path]),
     io:format("Data: ~p~n", [Data]),
@@ -83,11 +85,16 @@ put_with_path(Path, Data) ->
     Result = khepri:put(BinaryPath, Data),
     io:format("Put result: ~p~n", [Result]),
     
-    % Register the path
+    % Register the path - THIS IS WHERE WE NEED TO CHANGE
+    % Instead of just local registration, we need to broadcast to all nodes
     register_path(BinaryPath),
+    
+    % Add this new function call to broadcast the path to all nodes:
+    broadcast_path_to_cluster(BinaryPath),
     
     % Also register parent paths
     register_parent_paths(BinaryPath),
+    broadcast_parent_paths_to_cluster(BinaryPath),
     
     % Verify data was stored
     case khepri:exists(BinaryPath) of
@@ -105,6 +112,33 @@ put_with_path(Path, Data) ->
     
     Result.
 
+% Add these new functions to broadcast path registration to all cluster nodes
+broadcast_path_to_cluster(Path) ->
+    Nodes = nodes(),
+    lists:foreach(
+        fun(Node) ->
+            rpc:call(Node, ?MODULE, register_path, [Path])
+        end,
+        Nodes
+    ).
+
+broadcast_parent_paths_to_cluster(Path) ->
+    register_path_on_all_nodes(Path),
+    case Path of
+        [] -> ok;
+        _ ->
+            ParentPath = lists:droplast(Path),
+            broadcast_parent_paths_to_cluster(ParentPath)
+    end.
+
+register_path_on_all_nodes(Path) ->
+    Nodes = nodes(),
+    lists:foreach(
+        fun(Node) ->
+            rpc:call(Node, ?MODULE, register_path, [Path])
+        end,
+        Nodes
+    ).
 %% Convert Gleam condition to Erlang term
 condition_to_erlang({name_is, Name}) ->
     Name;
