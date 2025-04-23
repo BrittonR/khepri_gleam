@@ -128,21 +128,43 @@ stop_store_with_name(StoreId) ->
 %% Cluster Management Functions
 %% -----------------------------------------------
 
-%% Join a remote cluster
+%% Join a remote cluster - improved error handling
 join_cluster(RemoteNode) ->
     try
-        % Convert RemoteNode to atom
-        RemoteNodeAtom = list_to_atom(RemoteNode),
-        
-        Result = khepri_cluster:join(RemoteNodeAtom),
-        case Result of
-            ok -> {ok, nil};
-            {error, Reason} -> {error, format_error(Reason)}
+        % Validate the node name format first
+        case string:find(RemoteNode, "@") of
+            nomatch ->
+                {error, "Invalid node name format: missing '@' character"};
+            _ ->
+                % Try to connect first to verify reachability
+                RemoteNodeAtom = try 
+                    list_to_atom(RemoteNode)
+                catch 
+                    error:badarg -> 
+                        {error, "Invalid node name format, cannot convert to atom"} 
+                end,
+                
+                % Check if we got an error during conversion
+                case RemoteNodeAtom of
+                    {error, Reason} -> 
+                        {error, Reason};
+                    _ ->
+                        % First ping the node to verify connectivity
+                        case net_kernel:connect_node(RemoteNodeAtom) of
+                            true ->
+                                % Now try to join the Khepri cluster
+                                case khepri_cluster:join(RemoteNodeAtom) of
+                                    ok -> {ok, nil};
+                                    {error, Reason} -> {error, format_error(Reason)}
+                                end;
+                            false ->
+                                {error, "Cannot connect to node, check name and cookie"}
+                        end
+                end
         end
     catch
-        error:Error -> {error, format_error(Error)}
+        error:Error -> {error, "Exception: " ++ format_error(Error)}
     end.
-
 %% Join a remote cluster with timeout
 join_cluster_with_timeout(RemoteNode, Timeout) ->
     try
