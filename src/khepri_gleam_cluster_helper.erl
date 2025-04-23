@@ -128,44 +128,60 @@ stop_store_with_name(StoreId) ->
 %% Cluster Management Functions
 %% -----------------------------------------------
 
-%% Join a remote cluster - improved error handling
+%% In khepri_gleam_cluster_helper.erl - replace join_cluster function with this:
 join_cluster(RemoteNode) ->
     try
-        % Validate the node name format first
+        io:format("DEBUG: Trying to join node: ~p~n", [RemoteNode]),
+        
+        % Sanitize node name - handle special characters and validate format
         case string:find(RemoteNode, "@") of
             nomatch ->
                 {error, "Invalid node name format: missing '@' character"};
             _ ->
-                % Try to connect first to verify reachability
-                RemoteNodeAtom = try 
-                    list_to_atom(RemoteNode)
-                catch 
-                    error:badarg -> 
-                        {error, "Invalid node name format, cannot convert to atom"} 
-                end,
-                
-                % Check if we got an error during conversion
-                case RemoteNodeAtom of
-                    {error, Reason} -> 
-                        {error, Reason};
-                    _ ->
-                        % First ping the node to verify connectivity
-                        case net_kernel:connect_node(RemoteNodeAtom) of
-                            true ->
-                                % Now try to join the Khepri cluster
-                                case khepri_cluster:join(RemoteNodeAtom) of
-                                    ok -> {ok, nil};
-                                    {error, Reason} -> {error, format_error(Reason)}
-                                end;
-                            false ->
-                                {error, "Cannot connect to node, check name and cookie"}
+                % Now try creating the atom safely
+                try
+                    RemoteNodeAtom = list_to_existing_atom(RemoteNode),
+                    io:format("DEBUG: Converting using existing atom: ~p~n", [RemoteNodeAtom]),
+                    do_join_cluster(RemoteNodeAtom)
+                catch
+                    error:badarg ->
+                        % The atom doesn't exist yet, try to create it
+                        try
+                            RemoteNodeAtom = list_to_atom(RemoteNode),
+                            io:format("DEBUG: Successfully converted to atom: ~p~n", [RemoteNodeAtom]),
+                            do_join_cluster(RemoteNodeAtom)
+                        catch
+                            error:E ->
+                                {error, io_lib:format("Cannot convert node name to atom: ~p", [E])}
                         end
                 end
         end
     catch
-        error:Error -> {error, "Exception: " ++ format_error(Error)}
+        Type:Error:Stack ->
+            io:format("DEBUG: Exception joining node: ~p:~p~n~p~n", [Type, Error, Stack]),
+            {error, io_lib:format("Exception in join_cluster: ~p", [Error])}
     end.
-%% Join a remote cluster with timeout
+
+% Helper function to perform the actual joining
+do_join_cluster(NodeAtom) ->
+    % First try to ping the node
+    io:format("DEBUG: Pinging node: ~p~n", [NodeAtom]),
+    case net_kernel:connect_node(NodeAtom) of
+        true ->
+            io:format("DEBUG: Successfully connected to node~n"),
+            % Now try to join Khepri
+            case khepri_cluster:join(NodeAtom) of
+                ok -> 
+                    io:format("DEBUG: Successfully joined Khepri cluster~n"),
+                    {ok, nil};
+                {error, Reason} -> 
+                    io:format("DEBUG: Failed to join Khepri: ~p~n", [Reason]),
+                    {error, io_lib:format("Failed to join Khepri cluster: ~p", [Reason])}
+            end;
+        false ->
+            {error, "Failed to connect to node. Check that the node is running and using the same cookie"}
+    end.
+    %% Join a remote cluster with timeout
 join_cluster_with_timeout(RemoteNode, Timeout) ->
     try
         % Convert RemoteNode to atom
