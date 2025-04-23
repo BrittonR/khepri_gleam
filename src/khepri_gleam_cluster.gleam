@@ -233,8 +233,12 @@ fn handle_message(
 
       // Handle the result - check if it matches any success pattern
       // We need to inspect the result and handle both Ok(_) and plain Ok
+      // In the handle_message function in src/khepri_gleam_cluster.gleam
+
+      // The issue is around line 229
       case join_result {
-        Ok(_) -> {
+        Ok(value) -> {
+          // Check if value is the raw 'ok' atom or something else
           // Successfully joined with a value
           state.logger("info", "Successfully joined node: " <> node_name)
 
