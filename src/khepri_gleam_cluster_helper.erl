@@ -127,25 +127,41 @@ stop_store_with_name(StoreId) ->
 %% -----------------------------------------------
 %% Cluster Management Functions
 %% -----------------------------------------------
-
-%% Join a remote cluster with improved error handling
+%% Join a remote cluster with proper binary handling
 join_cluster(RemoteNode) ->
     try
-        io:format("DEBUG: Attempting to join node: ~p~n", [RemoteNode]),
+        %% First convert from binary to string if needed
+        NodeString = case is_binary(RemoteNode) of
+            true -> binary_to_list(RemoteNode);
+            false -> RemoteNode
+        end,
         
-        %% First validate node name format
-        case string:find(RemoteNode, "@") of
+        %% Then validate the node name format
+        case string:find(NodeString, "@") of
             nomatch ->
                 {error, "Invalid node name format: missing '@' character"};
             _ ->
-                join_with_validated_name(RemoteNode)
+                %% Now safely convert to atom and try to join
+                NodeAtom = list_to_atom(NodeString),
+                
+                %% Try pinging the node first
+                case net_kernel:connect_node(NodeAtom) of
+                    true ->
+                        %% Successfully connected, now try to join Khepri
+                        case khepri_cluster:join(NodeAtom) of
+                            ok -> {ok, nil};
+                            {error, Reason} -> {error, format_error(Reason)}
+                        end;
+                    false ->
+                        {error, "Failed to connect to node. Check that it's running and using the same cookie"}
+                end
         end
     catch
-        Type:Error:Stack ->
-            io:format("DEBUG: Exception joining node: ~p:~p~n", [Type, Error, Stack]),
-            {error, io_lib:format("Exception in join_cluster: ~p", [Error])}
+        error:badarg ->
+            {error, "Invalid node name format"};
+        error:Error ->
+            {error, format_error(Error)}
     end.
-
 %% Helper function to handle name conversion and joining
 join_with_validated_name(RemoteNode) ->
     %% Try to safely convert to atom 
