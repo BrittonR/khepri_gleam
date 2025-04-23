@@ -214,7 +214,6 @@ fn default_logger(prefix: String) -> Logger {
   fn(level, msg) { io.println(prefix <> " [" <> level <> "] " <> msg) }
 }
 
-/// Message handler for the cluster actor
 fn handle_message(
   message: ClusterMessage,
   state: ClusterState,
@@ -227,10 +226,14 @@ fn handle_message(
       // Convert the node name to an atom
       let node_atom = atom.create_from_string(node_name)
 
-      // Try to join the node
-      case join_node_raw(node_atom) {
+      // Try to join the node - handle the raw result carefully
+      let join_result = join_node_raw(node_atom)
+
+      // Handle the result - check if it matches any success pattern
+      // We need to inspect the result and handle both Ok(_) and plain Ok
+      case join_result {
         Ok(_) -> {
-          // Successfully joined
+          // Successfully joined with a value
           state.logger("info", "Successfully joined node: " <> node_name)
 
           // Notify the client of success
@@ -260,7 +263,6 @@ fn handle_message(
         }
       }
     }
-
     Leave(client) -> {
       // Log the leave attempt
       state.logger("info", "Leaving Khepri cluster")
