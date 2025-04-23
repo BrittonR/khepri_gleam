@@ -64,7 +64,9 @@ pub type Logger =
   fn(String, String) -> Nil
 
 /// External function declarations for Khepri and node operations
-@external(erlang, "khepri_cluster", "join")
+// @external(erlang, "khepri_cluster", "join")
+// fn join_node_raw(node: atom.Atom) -> Result(dynamic.Dynamic, dynamic.Dynamic)
+@external(erlang, "khepri_gleam_cluster_helper", "join_node")
 fn join_node_raw(node: atom.Atom) -> Result(dynamic.Dynamic, dynamic.Dynamic)
 
 @external(erlang, "khepri_cluster", "reset")

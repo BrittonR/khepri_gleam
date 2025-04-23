@@ -5,7 +5,8 @@
     is_store_running/1,
     format_members/1,
     format_error/1,
-    join_with_timeout/2
+    join_with_timeout/2,
+    join_node/1
 ]).
 
 %% Get the default store ID (name)
@@ -56,4 +57,19 @@ join_with_timeout(Node, Timeout) when is_list(Node), is_integer(Timeout) ->
     catch
         error:Error ->
             {error, format_error(Error)}
+    end.
+
+%% Wrapper for khepri_cluster:join that normalizes the return value
+join_node(Node) ->
+    try
+        Result = khepri_cluster:join(Node),
+        case Result of
+            ok -> {ok, nil};  % Convert plain 'ok' to '{ok, nil}' which Gleam expects
+            {ok, Value} -> {ok, Value};
+            {error, Reason} -> {error, Reason}
+        end
+    catch
+        error:Error ->
+            io:format("Error joining cluster: ~p~n", [Error]),
+            {error, Error}
     end.
