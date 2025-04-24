@@ -20,7 +20,8 @@
          unregister_path/1,
          get_registered_paths/0,
         clear_path_registry/0,
-        clear_all/0]).
+        clear_all/0,
+        safe_list_directory/1]).
 
 start() ->
     io:format("Starting Khepri with default configuration...~n"),
@@ -651,6 +652,73 @@ clear_all() ->
     khepri:delete([]),
     
     {ok, ok}.
+%% Safe directory listing that won't crash if items disappear
+safe_list_directory(Path) ->
+    try
+        io:format("Safely listing directory: ~p~n", [Path]),
+        
+        % First check if the path exists
+        case khepri:exists(Path) of
+            false -> 
+                io:format("Directory path doesn't exist~n"),
+                {ok, []};
+            true ->
+                % Convert path to binary format if needed
+                BinaryPath = case Path of
+                    [<<"cluster_events">>] -> 
+                        [<<"cluster_events">>];
+                    "/:cluster_events/" -> 
+                        [<<"cluster_events">>];
+                    _ when is_list(Path) -> 
+                        lists:map(fun(P) when is_binary(P) -> P;
+                                     (P) when is_list(P) -> list_to_binary(P);
+                                     (P) -> atom_to_binary(P, utf8)
+                                  end, Path)
+                end,
+                
+                % Get registered paths that are children of this path
+                AllPaths = get_registered_paths(),
+                io:format("All registered paths: ~p~n", [AllPaths]),
+                
+                % Find child paths
+                ChildPaths = [
+                    P || P <- AllPaths, 
+                    length(P) > 0,
+                    length(P) == length(BinaryPath) + 1,
+                    lists:prefix(BinaryPath, P)
+                ],
+                
+                io:format("Found child paths: ~p~n", [ChildPaths]),
+                
+                % Get data for each child path with error handling
+                Children = lists:filtermap(
+                    fun(ChildPath) ->
+                        try
+                            Name = lists:last(ChildPath),
+                            case khepri:get(ChildPath) of
+                                {ok, Data} ->
+                                    {true, {Name, Data}};
+                                _ ->
+                                    io:format("Failed to get data for ~p~n", [ChildPath]),
+                                    false
+                            end
+                        catch
+                            _:_ ->
+                                io:format("Error getting data for ~p~n", [ChildPath]),
+                                false
+                        end
+                    end,
+                    ChildPaths
+                ),
+                
+                io:format("Safe children result: ~p~n", [Children]),
+                {ok, Children}
+        end
+    catch
+        _:Reason -> 
+            io:format("Safe list directory caught error: ~p~n", [Reason]),
+            {ok, []}  % Return empty list instead of error
+    end.
 
 %% Helper function for operator conversion
 convert_compare_op(greater_than) -> 'gt';
