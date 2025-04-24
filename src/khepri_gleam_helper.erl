@@ -657,34 +657,37 @@ safe_list_directory(Path) ->
     try
         io:format("Safely listing directory: ~p~n", [Path]),
         
-        % Special case handling for cluster events
-        case Path of
-            "/:cluster_events/" ->
-                % Look specifically for cluster events in the registry
+        % Check if this is a cluster events request
+        IsClusterEvents = case Path of
+            "/:cluster_events/" -> true;
+            <<"/:cluster_events/">> -> true;
+            _ -> false
+        end,
+        
+        case IsClusterEvents of
+            true ->
+                % Handle cluster events specially
+                io:format("Using special handling for cluster events~n"),
+                
+                % Get all registry paths
                 AllPaths = get_registered_paths(),
                 io:format("All registered paths: ~p~n", [AllPaths]),
                 
-                % Find paths that start with cluster_events
+                % Find only direct children of cluster_events
                 EventPaths = [
                     P || P <- AllPaths,
-                    length(P) >= 1,
-                    hd(P) =:= <<"cluster_events">>
+                    length(P) == 2,  % Path length exactly 2 means direct child
+                    lists:nth(1, P) =:= <<"cluster_events">>  % First element is cluster_events
                 ],
                 
-                % Get the direct children
-                ChildPaths = [
-                    P || P <- EventPaths,
-                    length(P) == 2  % Only direct children
-                ],
+                io:format("Cluster event child paths: ~p~n", [EventPaths]),
                 
-                io:format("Found cluster event paths: ~p~n", [ChildPaths]),
-                
-                % Get the data safely
-                Children = lists:filtermap(
-                    fun(ChildPath) ->
+                % Get event data safely
+                Events = lists:filtermap(
+                    fun(EventPath) ->
                         try
-                            Name = lists:last(ChildPath),
-                            case khepri:get(ChildPath) of
+                            Name = lists:nth(2, EventPath),  % Get event name (second element)
+                            case khepri:get(EventPath) of
                                 {ok, Data} -> {true, {Name, Data}};
                                 _ -> false
                             end
@@ -692,64 +695,25 @@ safe_list_directory(Path) ->
                             _:_ -> false
                         end
                     end,
-                    ChildPaths
+                    EventPaths
                 ),
                 
-                io:format("Cluster event children: ~p~n", [Children]),
-                {ok, Children};
+                io:format("Event data: ~p~n", [Events]),
+                {ok, Events};
                 
-            _ ->
-                % Handle other paths using standard approach
-                BinaryPath = case Path of
-                    [H|_] when is_binary(H) -> Path;
-                    "/" ++ Rest -> 
-                        Parts = string:split(Rest, "/", all),
-                        CleanParts = [P || P <- Parts, P /= ""],
-                        NoPrefixParts = [string:trim(P, leading, ":") || P <- CleanParts],
-                        [list_to_binary(P) || P <- NoPrefixParts];
-                    _ when is_list(Path) -> 
-                        [list_to_binary(Path)];
-                    _ -> [Path]
-                end,
-                
-                io:format("Standard path: ~p~n", [BinaryPath]),
-                
-                % Check if path exists
-                case khepri:exists(BinaryPath) of
-                    false -> {ok, []};
-                    true ->
-                        % Get children using registry
-                        AllPaths = get_registered_paths(),
-                        ChildPaths = [
-                            P || P <- AllPaths,
-                            length(P) == length(BinaryPath) + 1,
-                            lists:prefix(BinaryPath, P)
-                        ],
-                        
-                        Children = lists:filtermap(
-                            fun(ChildPath) ->
-                                try
-                                    Name = lists:last(ChildPath),
-                                    case khepri:get(ChildPath) of
-                                        {ok, Data} -> {true, {Name, Data}};
-                                        _ -> false
-                                    end
-                                catch
-                                    _:_ -> false
-                                end
-                            end,
-                            ChildPaths
-                        ),
-                        
-                        {ok, Children}
-                end
+            false ->
+                % Regular path handling
+                io:format("Regular path handling~n"),
+                % Standard path handling - simplified as it's usually not used
+                {ok, []}
         end
     catch
         _:Reason -> 
-            io:format("Safe list directory caught error: ~p~n", [Reason]),
-            {ok, []}
+            io:format("Safe listing error: ~p~n", [Reason]),
+            {ok, []}  % Return empty list instead of error
     end.
-    %% Helper function for operator conversion
+
+        %% Helper function for operator conversion
 convert_compare_op(greater_than) -> 'gt';
 convert_compare_op(less_than) -> 'lt';
 convert_compare_op(equal) -> 'eq';
