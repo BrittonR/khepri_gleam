@@ -655,7 +655,7 @@ clear_all() ->
 %% Safe directory listing that won't crash if items disappear
 safe_list_directory(Path) ->
     try
-        io:format("Safely listing directory: ~p~n", [Path]),
+        % Skip detailed logging for frequently called operations
         
         % Check if this is a cluster events request
         IsClusterEvents = case Path of
@@ -666,12 +666,8 @@ safe_list_directory(Path) ->
         
         case IsClusterEvents of
             true ->
-                % Handle cluster events specially
-                io:format("Using special handling for cluster events~n"),
-                
                 % Get all registry paths
                 AllPaths = get_registered_paths(),
-                io:format("All registered paths: ~p~n", [AllPaths]),
                 
                 % Find only direct children of cluster_events
                 EventPaths = [
@@ -679,8 +675,6 @@ safe_list_directory(Path) ->
                     length(P) == 2,  % Path length exactly 2 means direct child
                     lists:nth(1, P) =:= <<"cluster_events">>  % First element is cluster_events
                 ],
-                
-                io:format("Cluster event child paths: ~p~n", [EventPaths]),
                 
                 % Get event data safely
                 Events = lists:filtermap(
@@ -698,13 +692,10 @@ safe_list_directory(Path) ->
                     EventPaths
                 ),
                 
-                io:format("Event data: ~p~n", [Events]),
                 {ok, Events};
                 
             false ->
-                % Regular path handling
-                io:format("Regular path handling~n"),
-                % Standard path handling - simplified as it's usually not used
+                % Regular path handling - simplified
                 {ok, []}
         end
     catch
