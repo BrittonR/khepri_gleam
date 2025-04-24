@@ -657,25 +657,39 @@ safe_list_directory(Path) ->
     try
         io:format("Safely listing directory: ~p~n", [Path]),
         
+        % Convert string path format to proper binary list format
+        BinaryPath = case Path of
+            [H|_] when is_binary(H) -> 
+                % Already in binary list format
+                Path;
+            "/:cluster_events/" -> 
+                [<<"cluster_events">>];
+            "/" ++ Rest -> 
+                % Handle path like "/:something/" format
+                Parts = string:split(Rest, "/", all),
+                CleanParts = [P || P <- Parts, P /= ""],
+                NoPrefixParts = [string:trim(P, leading, ":") || P <- CleanParts],
+                [list_to_binary(P) || P <- NoPrefixParts];
+            _ when is_list(Path) andalso is_list(hd(Path)) -> 
+                % Handle list of strings
+                [list_to_binary(P) || P <- Path];
+            _ -> 
+                % Fallback
+                io:format("Unknown path format: ~p~n", [Path]),
+                case is_list(Path) of
+                    true -> Path;
+                    false -> [Path]
+                end
+        end,
+        
+        io:format("Converted path to: ~p~n", [BinaryPath]),
+        
         % First check if the path exists
-        case khepri:exists(Path) of
+        case khepri:exists(BinaryPath) of
             false -> 
-                io:format("Directory path doesn't exist~n"),
+                io:format("Directory path doesn't exist after conversion~n"),
                 {ok, []};
             true ->
-                % Convert path to binary format if needed
-                BinaryPath = case Path of
-                    [<<"cluster_events">>] -> 
-                        [<<"cluster_events">>];
-                    "/:cluster_events/" -> 
-                        [<<"cluster_events">>];
-                    _ when is_list(Path) -> 
-                        lists:map(fun(P) when is_binary(P) -> P;
-                                     (P) when is_list(P) -> list_to_binary(P);
-                                     (P) -> atom_to_binary(P, utf8)
-                                  end, Path)
-                end,
-                
                 % Get registered paths that are children of this path
                 AllPaths = get_registered_paths(),
                 io:format("All registered paths: ~p~n", [AllPaths]),
@@ -699,13 +713,10 @@ safe_list_directory(Path) ->
                                 {ok, Data} ->
                                     {true, {Name, Data}};
                                 _ ->
-                                    io:format("Failed to get data for ~p~n", [ChildPath]),
                                     false
                             end
                         catch
-                            _:_ ->
-                                io:format("Error getting data for ~p~n", [ChildPath]),
-                                false
+                            _:_ -> false
                         end
                     end,
                     ChildPaths
@@ -719,7 +730,6 @@ safe_list_directory(Path) ->
             io:format("Safe list directory caught error: ~p~n", [Reason]),
             {ok, []}  % Return empty list instead of error
     end.
-
 %% Helper function for operator conversion
 convert_compare_op(greater_than) -> 'gt';
 convert_compare_op(less_than) -> 'lt';
