@@ -663,38 +663,43 @@ safe_list_directory(Path) ->
                 % Already in binary list format
                 Path;
             "/:cluster_events/" -> 
+                % Special case for cluster events path
                 [<<"cluster_events">>];
-            "/" ++ Rest -> 
-                % Handle path like "/:something/" format
-                Parts = string:split(Rest, "/", all),
-                CleanParts = [P || P <- Parts, P /= ""],
-                NoPrefixParts = [string:trim(P, leading, ":") || P <- CleanParts],
-                [list_to_binary(P) || P <- NoPrefixParts];
-            _ when is_list(Path) andalso is_list(hd(Path)) -> 
-                % Handle list of strings
-                [list_to_binary(P) || P <- Path];
+            _ when is_list(Path) andalso (hd(Path) =:= $/) -> 
+                % Handle string path starting with / like "/:something/"
+                CleanPath = string:trim(Path, trailing, "/"),  % Remove trailing /
+                TrimmedPath = string:trim(CleanPath, leading, "/"),  % Remove leading /
+                Parts = string:split(TrimmedPath, "/", all),
+                CleanParts = [string:trim(P, leading, ":") || P <- Parts],
+                [list_to_binary(P) || P <- CleanParts, P /= ""];
             _ -> 
-                % Fallback
-                io:format("Unknown path format: ~p~n", [Path]),
+                % Fallback - just try with the path as-is
+                io:format("Using fallback path handling for: ~p~n", [Path]),
                 case is_list(Path) of
-                    true -> Path;
-                    false -> [Path]
+                    true -> 
+                        % Try checking if it's a string like "cluster_events"
+                        case io_lib:printable_list(Path) of
+                            true -> [list_to_binary(Path)];
+                            false -> Path
+                        end;
+                    false -> 
+                        % If it's not a list, just wrap it
+                        [Path]
                 end
         end,
         
         io:format("Converted path to: ~p~n", [BinaryPath]),
         
+        % Now try both the converted path and direct registry access
         % First check if the path exists
         case khepri:exists(BinaryPath) of
-            false -> 
-                io:format("Directory path doesn't exist after conversion~n"),
-                {ok, []};
             true ->
+                io:format("Path exists, finding children~n"),
                 % Get registered paths that are children of this path
                 AllPaths = get_registered_paths(),
                 io:format("All registered paths: ~p~n", [AllPaths]),
                 
-                % Find child paths
+                % Find child paths that are direct children of this path
                 ChildPaths = [
                     P || P <- AllPaths, 
                     length(P) > 0,
@@ -723,6 +728,50 @@ safe_list_directory(Path) ->
                 ),
                 
                 io:format("Safe children result: ~p~n", [Children]),
+                {ok, Children};
+                
+            false -> 
+                % Path doesn't exist in Khepri, try a direct approach from registry
+                io:format("Path doesn't exist, trying direct registry lookup~n"),
+                
+                % Try to find any events in the registry
+                AllPaths = get_registered_paths(),
+                EventPaths = case Path of
+                    "/:cluster_events/" ->
+                        % Find any paths that contain "cluster_events"
+                        [P || P <- AllPaths, 
+                              length(P) >= 1, 
+                              lists:member(<<"cluster_events">>, P)];
+                    _ -> []
+                end,
+                
+                % Find direct children of cluster_events
+                ClusterEventChildPaths = [
+                    P || P <- EventPaths, 
+                    length(P) == 2,  % Should be [<<"cluster_events">>, ChildName]
+                    lists:nth(1, P) =:= <<"cluster_events">>
+                ],
+                
+                io:format("Direct registry event paths: ~p~n", [ClusterEventChildPaths]),
+                
+                % Build result with safe data access
+                Children = lists:filtermap(
+                    fun(ChildPath) ->
+                        try
+                            Name = lists:last(ChildPath),
+                            case khepri:get(ChildPath) of
+                                {ok, Data} -> 
+                                    {true, {Name, Data}};
+                                _ -> false
+                            end
+                        catch
+                            _:_ -> false
+                        end
+                    end,
+                    ClusterEventChildPaths
+                ),
+                
+                io:format("Registry-based result: ~p~n", [Children]),
                 {ok, Children}
         end
     catch
