@@ -162,57 +162,18 @@ join_cluster(RemoteNode) ->
         error:Error ->
             {error, format_error(Error)}
     end.
-%% Helper function to handle name conversion and joining
-join_with_validated_name(RemoteNode) ->
-    %% Try to safely convert to atom 
-    NodeAtom = case catch(list_to_existing_atom(RemoteNode)) of
-        {'EXIT', _} ->
-            %% Atom doesn't exist yet, create it
-            list_to_atom(RemoteNode);
-        ExistingAtom ->
-            ExistingAtom
-    end,
-    
-    %% Now try to connect and join
-    io:format("DEBUG: Converted to atom: ~p~n", [NodeAtom]),
-    case net_kernel:connect_node(NodeAtom) of
-        true ->
-            io:format("DEBUG: Successfully connected to node~n"),
-            case khepri_cluster:join(NodeAtom) of
-                ok -> 
-                    io:format("DEBUG: Successfully joined Khepri cluster~n"),
-                    {ok, nil};
-                {error, Reason} -> 
-                    io:format("DEBUG: Failed to join Khepri cluster: ~p~n", [Reason]),
-                    {error, io_lib:format("Failed to join Khepri: ~p", [Reason])}
-            end;
-        false ->
-            {error, "Failed to connect to node. Check that it's running and using the same cookie"}
-    end.
-% Helper function to perform the actual joining
-do_join_cluster(NodeAtom) ->
-    % First try to ping the node
-    io:format("DEBUG: Pinging node: ~p~n", [NodeAtom]),
-    case net_kernel:connect_node(NodeAtom) of
-        true ->
-            io:format("DEBUG: Successfully connected to node~n"),
-            % Now try to join Khepri
-            case khepri_cluster:join(NodeAtom) of
-                ok -> 
-                    io:format("DEBUG: Successfully joined Khepri cluster~n"),
-                    {ok, nil};
-                {error, Reason} -> 
-                    io:format("DEBUG: Failed to join Khepri: ~p~n", [Reason]),
-                    {error, io_lib:format("Failed to join Khepri cluster: ~p", [Reason])}
-            end;
-        false ->
-            {error, "Failed to connect to node. Check that the node is running and using the same cookie"}
-    end.
-    %% Join a remote cluster with timeout
+
+%% Join a remote cluster with timeout
 join_cluster_with_timeout(RemoteNode, Timeout) ->
     try
+        %% Handle binary conversion
+        NodeString = case is_binary(RemoteNode) of
+            true -> binary_to_list(RemoteNode);
+            false -> RemoteNode
+        end,
+        
         % Convert RemoteNode to atom
-        RemoteNodeAtom = list_to_atom(RemoteNode),
+        RemoteNodeAtom = list_to_atom(NodeString),
         
         Result = khepri_cluster:join(RemoteNodeAtom, Timeout),
         case Result of
