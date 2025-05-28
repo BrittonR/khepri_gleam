@@ -117,12 +117,19 @@ pub type CompareOp {
 
 // Helper function to decode a 2-tuple
 fn decode_tuple2(
-  first: decode.Decoder(a),
-  second: decode.Decoder(b),
+  first_decoder: decode.Decoder(a),
+  second_decoder: decode.Decoder(b),
 ) -> decode.Decoder(#(a, b)) {
-  use a <- decode.at([0], first)
-  use b <- decode.at([1], second)
-  decode.success(#(a, b))
+  // First decode the element at index 0
+  decode.at([0], first_decoder)
+  |> decode.then(fn(first_value) {
+    // Then decode the element at index 1
+    decode.at([1], second_decoder)
+    |> decode.map(fn(second_value) {
+      // Combine them into a tuple
+      #(first_value, second_value)
+    })
+  })
 }
 
 // Helper function to convert Gleam path to Khepri path format
