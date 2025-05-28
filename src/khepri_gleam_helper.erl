@@ -1,5 +1,6 @@
 %% src/khepri_gleam_helper.erl
 -module(khepri_gleam_helper).
+-include_lib("khepri/include/khepri.hrl").
 -export([condition_to_erlang/1, 
          to_pattern_path/1,
          get_pattern/1,
@@ -15,11 +16,7 @@
          import_data/2,
          put_with_path/2,
          start/0,
-         init_path_registry/0,
-         register_path/1,
-         unregister_path/1,
          get_registered_paths/0,
-         clear_path_registry/0,
          clear_all/0,
          safe_list_directory/1,
          get_many/1,
@@ -29,45 +26,23 @@ start() ->
     io:format("Starting Khepri with default configuration...~n"),
     Result = khepri:start(),
     io:format("Khepri start result: ~p~n", [Result]),
-    
-    % Initialize and clear path registry
-    init_path_registry(),
-    clear_path_registry(),
-    
     ok.
 
-%% Path registry management functions
-init_path_registry() ->
-    % Create ETS table if it doesn't exist
-    case ets:info(khepri_paths) of
-        undefined ->
-            ets:new(khepri_paths, [named_table, set, public]);
-        _ -> 
-            ok
+%% Get all paths from Khepri directly instead of using ETS registry
+get_registered_paths() ->
+    io:format("Getting all paths from Khepri...~n"),
+    case khepri:get_many([?KHEPRI_WILDCARD_STAR_STAR]) of
+        {ok, TreeMap} ->
+            % Extract paths from the tree map
+            Paths = maps:keys(TreeMap),
+            io:format("Found ~p paths in Khepri~n", [length(Paths)]),
+            Paths;
+        {error, _Reason} ->
+            io:format("Failed to get paths from Khepri~n"),
+            []
     end.
 
-register_path(Path) ->
-    init_path_registry(),
-    ets:insert(khepri_paths, {Path, true}).
-
-unregister_path(Path) ->
-    init_path_registry(),
-    ets:delete(khepri_paths, Path).
-
-get_registered_paths() ->
-    init_path_registry(),
-    Paths = ets:tab2list(khepri_paths),
-    [Path || {Path, _} <- Paths].
-
-% Helper to register all parent paths
-register_parent_paths([]) ->
-    register_path([]);
-register_parent_paths(Path) ->
-    register_path(Path),
-    ParentPath = lists:droplast(Path),
-    register_parent_paths(ParentPath).
-
-%% Enhanced put function with proper path handling
+%% Enhanced put function without separate path registry
 put_with_path(Path, Data) ->
     io:format("Putting data at path: ~p~n", [Path]),
     io:format("Data: ~p~n", [Data]),
@@ -87,60 +62,7 @@ put_with_path(Path, Data) ->
     Result = khepri:put(BinaryPath, Data),
     io:format("Put result: ~p~n", [Result]),
     
-    % Register the path - THIS IS WHERE WE NEED TO CHANGE
-    % Instead of just local registration, we need to broadcast to all nodes
-    register_path(BinaryPath),
-    
-    % Add this new function call to broadcast the path to all nodes:
-    broadcast_path_to_cluster(BinaryPath),
-    
-    % Also register parent paths
-    register_parent_paths(BinaryPath),
-    broadcast_parent_paths_to_cluster(BinaryPath),
-    
-    % Verify data was stored
-    case khepri:exists(BinaryPath) of
-        true -> 
-            io:format("Verified data exists at path~n"),
-            {ok, StoredData} = khepri:get(BinaryPath),
-            io:format("Stored data: ~p~n", [StoredData]);
-        false ->
-            io:format("WARNING: Data verification failed, path doesn't exist!~n")
-    end,
-    
-    % Show all registered paths
-    AllPaths = get_registered_paths(),
-    io:format("All registered paths: ~p~n", [AllPaths]),
-    
     Result.
-
-% Add these new functions to broadcast path registration to all cluster nodes
-broadcast_path_to_cluster(Path) ->
-    Nodes = nodes(),
-    lists:foreach(
-        fun(Node) ->
-            rpc:call(Node, ?MODULE, register_path, [Path])
-        end,
-        Nodes
-    ).
-
-broadcast_parent_paths_to_cluster(Path) ->
-    register_path_on_all_nodes(Path),
-    case Path of
-        [] -> ok;
-        _ ->
-            ParentPath = lists:droplast(Path),
-            broadcast_parent_paths_to_cluster(ParentPath)
-    end.
-
-register_path_on_all_nodes(Path) ->
-    Nodes = nodes(),
-    lists:foreach(
-        fun(Node) ->
-            rpc:call(Node, ?MODULE, register_path, [Path])
-        end,
-        Nodes
-    ).
 
 %% Get multiple values matching a pattern
 get_many(Pattern) ->
@@ -148,7 +70,8 @@ get_many(Pattern) ->
     
     % Convert string pattern elements to binaries
     BinaryPattern = lists:map(
-        fun("_") -> '_';  % Keep wildcards as atoms
+        fun("_") -> ?KHEPRI_WILDCARD_STAR;  % Single level wildcard
+           ("**") -> ?KHEPRI_WILDCARD_STAR_STAR;  % Multi-level wildcard
            (Part) when is_list(Part) -> list_to_binary(Part);
            (Part) when is_binary(Part) -> Part;  % Already binary
            (Part) -> Part
@@ -172,7 +95,8 @@ get_many(Pattern) ->
         {error, Reason} ->
             {error, io_lib:format("~p", [Reason])}
     end.
-%% List directory contents directly
+
+%% List directory contents directly using Khepri's native functions
 list_directory_direct(Path) ->
     io:format("Listing directory: ~p~n", [Path]),
     
@@ -183,7 +107,7 @@ list_directory_direct(Path) ->
     end,
     
     % Build a pattern to match all children
-    Pattern = BinaryPath ++ ['_'],
+    Pattern = BinaryPath ++ [?KHEPRI_WILDCARD_STAR],
     
     io:format("Using pattern: ~p~n", [Pattern]),
     
@@ -245,6 +169,7 @@ string_to_khepri_path(Path) when is_list(Path) ->
             P -> list_to_binary(P)
         end
     end, Parts) -- [skip].
+
 %% Convert Gleam condition to Erlang term
 condition_to_erlang({name_is, Name}) ->
     Name;
@@ -327,7 +252,7 @@ to_pattern_path(PathWithConditions) ->
     io:format("Converted to: ~p~n", [Path]),
     Path.
 
-%% Get with pattern - UPDATED
+%% Get with pattern
 get_pattern(Path) ->
     try
         io:format("Trying to get with path: ~p~n", [Path]),
@@ -344,49 +269,14 @@ get_pattern(Path) ->
                 Path
         end,
         
-        % Check if path contains wildcards
-        HasWildcard = lists:any(fun(Part) -> 
-            case Part of
-                '_' -> true;
-                Element when is_tuple(Element) -> true;
-                Element when is_map(Element) -> true;
-                _ -> false
-            end
-        end, ConvertedPath),
-        
-        Result = case HasWildcard of
-            true ->
-                % For wildcard patterns, try a different approach
-                % First get the parent path (without the wildcard)
-                ParentPath = lists:droplast(ConvertedPath),
-                io:format("Using parent path: ~p~n", [ParentPath]),
-                
-                % Check if parent exists
-                case khepri:get(ParentPath) of
-                    {ok, _} ->
-                        % Try using list_children
-                        io:format("Parent found, getting children~n"),
-                        % Return the parent itself for now
-                        khepri:get(ParentPath);
-                    Error ->
-                        io:format("Parent not found: ~p~n", [Error]),
-                        Error
-                end;
-            false ->
-                % Use regular get for direct paths
-                io:format("Using get for direct path~n"),
-                khepri:get(ConvertedPath)
-        end,
-        
-        io:format("Get result: ~p~n", [Result]),
-        Result
+        khepri:get(ConvertedPath)
     catch
         error:Reason -> 
             io:format("Get pattern error: ~p~n", [Reason]),
             {error, unknown_error}
     end.
 
-%% Delete with pattern - UPDATED
+%% Delete with pattern
 delete_pattern(Path) ->
     try
         io:format("Trying to delete with path: ~p~n", [Path]),
@@ -410,7 +300,7 @@ delete_pattern(Path) ->
             ok
     end.
 
-%% Exists with pattern - UPDATED
+%% Exists with pattern
 exists_pattern(Path) ->
     try
         io:format("Trying exists pattern with path: ~p~n", [Path]),
@@ -430,50 +320,14 @@ exists_pattern(Path) ->
         
         io:format("Converted path: ~p~n", [ConvertedPath]),
         
-        % Check if this is a pattern that might match multiple nodes
-        HasWildcard = lists:any(fun(Part) -> 
-            case Part of
-                '_' -> true;
-                Element when is_tuple(Element) -> true;
-                Element when is_map(Element) -> true;
-                _ -> false
-            end
-        end, ConvertedPath),
-        
-        if HasWildcard ->
-            % For wildcard patterns, we need to check if any children exist
-            % Get the parent path (without the wildcard)
-            ParentPath = lists:sublist(ConvertedPath, length(ConvertedPath) - 1),
-            io:format("Checking parent path: ~p for children~n", [ParentPath]),
-            
-            % Check if parent exists
-            case khepri:exists(ParentPath) of
-                false -> false;
-                true -> 
-                    % Use our registry to check for children
-                    AllPaths = get_registered_paths(),
-                    ChildPaths = [
-                        P || P <- AllPaths, 
-                        length(P) > length(ParentPath),
-                        lists:prefix(ParentPath, P)
-                    ],
-                    
-                    io:format("Child paths from registry: ~p~n", [ChildPaths]),
-                    length(ChildPaths) > 0
-            end;
-        true ->
-            % For direct paths without wildcards, use direct exists
-            Result = khepri:exists(ConvertedPath),
-            io:format("Direct path exists check: ~p~n", [Result]),
-            Result
-        end
+        khepri:exists(ConvertedPath)
     catch
         error:Reason -> 
             io:format("Exists pattern error: ~p~n", [Reason]),
             false
     end.
 
-%% List children of a path - using get_children_direct
+%% List children of a path
 list_children(Path) ->
     try
         io:format("Listing children for path: ~p~n", [Path]),
@@ -486,129 +340,41 @@ list_children(Path) ->
             {error, Reason}
     end.
 
-% Improved helper to list all paths using registry
-list_all_paths() ->
-    io:format("Getting all paths from registry~n"),
-    Paths = get_registered_paths(),
-    io:format("Registered paths: ~p~n", [Paths]),
-    Paths.
-
 get_children_direct(Path) ->
-    io:format("Generic child discovery for path: ~p~n", [Path]),
+    io:format("Getting children for path: ~p~n", [Path]),
     
-    % First check if the path exists
-    case khepri:exists(Path) of
-        false -> 
-            io:format("Path doesn't exist, reverting to testing mode~n"),
-            {ok, []};
-        true ->
-            io:format("Path exists, trying to find children~n"),
-            % Get registered paths that are children of this path
-            AllPaths = get_registered_paths(),
-            ChildPaths = [
-                P || P <- AllPaths, 
-                length(P) == length(Path) + 1,
-                lists:prefix(Path, P)
-            ],
-            
-            io:format("Child paths from registry: ~p~n", [ChildPaths]),
-            
-            case ChildPaths of
-                [] ->
-                    % If no children found in registry, fall back to hardcoded test data
-                    case Path of
-                        [<<"inventory">>, <<"fruits">>] ->
-                            % Check known fruit paths directly
-                            Children = [
-                                begin
-                                    ChildPath = Path ++ [Name],
-                                    case khepri:exists(ChildPath) of
-                                        true ->
-                                            {ok, Data} = khepri:get(ChildPath),
-                                            {Name, Data};
-                                        false ->
-                                            % Use dummy data if direct check fails
-                                            {Name, dummy_data_for(Name)}
-                                    end
-                                end || 
-                                Name <- [<<"apple">>, <<"banana">>, <<"orange">>]
-                            ],
-                            io:format("Raw children result: ~p~n", [Children]),
-                            {ok, Children};
+    % Build a pattern to match all direct children
+    Pattern = Path ++ [?KHEPRI_WILDCARD_STAR],
+    
+    case khepri:get_many(Pattern) of
+        {ok, Results} ->
+            % Extract direct children
+            Children = lists:filtermap(
+                fun({FullPath, Value}) ->
+                    case FullPath of
+                        % Check if this is a direct child
+                        _ when length(FullPath) == length(Path) + 1 ->
+                            ChildName = lists:last(FullPath),
+                            {true, {ChildName, Value}};
                         _ ->
-                            % For unknown paths, try using the probe_paths as before
-                            io:format("Using probe_paths for unknown path structure~n"),
-                            ProbePaths = probe_paths(Path),
-                            {ok, ProbePaths}
-                    end;
-                _ ->
-                    % Use the registry-found children
-                    Children = [
-                        begin
-                            Name = lists:last(P),
-                            {ok, Data} = khepri:get(P),
-                            {Name, Data}
-                        end ||
-                        P <- ChildPaths
-                    ],
-                    io:format("Children from registry: ~p~n", [Children]),
-                    {ok, Children}
-            end
+                            false
+                    end
+                end,
+                maps:to_list(Results)
+            ),
+            {ok, Children};
+        {error, Reason} ->
+            io:format("Error getting children: ~p~n", [Reason]),
+            {error, Reason}
     end.
-
-% Helper function to provide dummy data for testing
-dummy_data_for(<<"apple">>) -> {<<"count">>, 10, <<"color">>, <<"red">>};
-dummy_data_for(<<"banana">>) -> {<<"count">>, 5, <<"color">>, <<"yellow">>};
-dummy_data_for(<<"orange">>) -> {<<"count">>, 7, <<"color">>, <<"orange">>};
-dummy_data_for(<<"carrot">>) -> {<<"count">>, 15, <<"color">>, <<"orange">>};
-dummy_data_for(_) -> undefined.
-
-% Helper function to probe for paths - note that we still verify 
-% if they exist in the database and get actual data
-probe_paths(Path) ->
-    % Generate candidate names based on path
-    TestNames = case Path of
-        [<<"inventory">>, <<"fruits">>] -> 
-            [<<"apple">>, <<"banana">>, <<"orange">>];
-        [<<"inventory">>, <<"vegetables">>] -> 
-            [<<"carrot">>];
-        _ ->
-            []
-    end,
-    
-    % Check existence and get actual data
-    lists:filtermap(
-        fun(Name) ->
-            TestPath = Path ++ [Name],
-            case khepri:exists(TestPath) of
-                true ->
-                    {ok, Data} = khepri:get(TestPath),
-                    {true, {Name, Data}};
-                false ->
-                    % Return dummy data for testing
-                    {true, {Name, dummy_data_for(Name)}}
-            end
-        end,
-        TestNames
-    ).
 
 do_transaction_put(Path, Data) ->
     try
-        % Keep only Khepri operations inside the transaction
         Result = khepri:transaction(
             fun() ->
                 khepri_tx:put(Path, Data),
                 ok
             end),
-        
-        % Register paths outside the transaction after it succeeds
-        case Result of
-            ok ->
-                register_path(Path),
-                register_parent_paths(Path);
-            _ -> ok
-        end,
-        
         {ok, Result}
     catch
         error:Reason -> 
@@ -636,14 +402,6 @@ do_transaction_delete(Path) ->
                 khepri_tx:delete(Path),
                 ok
             end),
-        
-        % Unregister path outside the transaction after it succeeds
-        case Result of
-            ok ->
-                unregister_path(Path);
-            _ -> ok
-        end,
-        
         {ok, Result}
     catch
         error:Reason -> 
@@ -677,42 +435,32 @@ do_transaction_exists(Path) ->
             {error, Reason}
     end.
 
-%% Export data from Khepri to a file - using path registry
+%% Export data from Khepri to a file - using native Khepri functions
 export_data(Path, CallbackModule, Filename) ->
     try
         io:format("Exporting data from path: ~p using ~p to file: ~p~n", [Path, CallbackModule, Filename]),
         
-        % Get all registered paths
-        AllPaths = get_registered_paths(),
-        io:format("BEFORE EXPORT - All registered paths: ~p~n", [AllPaths]),
-        
-        % Get the data for each path and build a map
-        PathsToExport = [P || P <- AllPaths, lists:prefix(Path, P)],
-        DataMap = maps:from_list(
-            [{P, case khepri:get(P) of
-                     {ok, Data} -> Data;
-                     _ -> undefined
-                 end} || P <- PathsToExport]
-        ),
-        io:format("BEFORE EXPORT - Data to export: ~p~n", [DataMap]),
-        
-        % Write the data to a file (simple format)
-        file:write_file(Filename, io_lib:format("~p.~n", [DataMap])),
-        
-        {ok, ok}
+        % Get all data under the path
+        Pattern = Path ++ [?KHEPRI_WILDCARD_STAR_STAR],
+        case khepri:get_many(Pattern) of
+            {ok, DataMap} ->
+                io:format("Data to export: ~p~n", [DataMap]),
+                % Write the data to a file
+                file:write_file(Filename, io_lib:format("~p.~n", [DataMap])),
+                {ok, ok};
+            {error, Reason} ->
+                {error, io_lib:format("Export failed: ~p", [Reason])}
+        end
     catch
         error:Reason -> 
             io:format("Export error: ~p~n", [Reason]),
             {error, Reason}
     end.
 
-%% Import data from a file into Khepri - using path registry
+%% Import data from a file into Khepri
 import_data(CallbackModule, Filename) ->
     try
         io:format("Importing data from file: ~p~n", [Filename]),
-        
-        % Clear all paths before importing
-        clear_path_registry(),
         
         % Read the data from the file
         {ok, Binary} = file:read_file(Filename),
@@ -727,17 +475,11 @@ import_data(CallbackModule, Filename) ->
             fun(Path, Value, _Acc) ->
                 io:format("Importing path: ~p~n", [Path]),
                 khepri:put(Path, Value),
-                register_path(Path),
-                register_parent_paths(Path),
                 ok
             end,
             ok,
             Term
         ),
-        
-        % Verify registry after import
-        AllPaths = get_registered_paths(),
-        io:format("AFTER IMPORT - All registered paths: ~p~n", [AllPaths]),
         
         {ok, ok}
     catch
@@ -746,16 +488,8 @@ import_data(CallbackModule, Filename) ->
             {error, Reason}
     end.
 
-%% Clear all registered paths
-clear_path_registry() ->
-    init_path_registry(),
-    ets:delete_all_objects(khepri_paths).
-
-%% Clear everything (database and registry)
+%% Clear everything
 clear_all() ->
-    % Clear the path registry
-    clear_path_registry(),
-    
     % Delete the root node in Khepri
     khepri:delete([]),
     
@@ -764,47 +498,25 @@ clear_all() ->
 %% Safe directory listing that won't crash if items disappear
 safe_list_directory(Path) ->
     try
-        % Skip detailed logging for frequently called operations
-        
-        % Check if this is a cluster events request
-        IsClusterEvents = case Path of
-            "/:cluster_events/" -> true;
-            <<"/:cluster_events/">> -> true;
-            _ -> false
-        end,
-        
-        case IsClusterEvents of
-            true ->
-                % Get all registry paths
-                AllPaths = get_registered_paths(),
-                
-                % Find only direct children of cluster_events
-                EventPaths = [
-                    P || P <- AllPaths,
-                    length(P) == 2,  % Path length exactly 2 means direct child
-                    lists:nth(1, P) =:= <<"cluster_events">>  % First element is cluster_events
-                ],
-                
-                % Get event data safely
-                Events = lists:filtermap(
-                    fun(EventPath) ->
-                        try
-                            Name = lists:nth(2, EventPath),  % Get event name (second element)
-                            case khepri:get(EventPath) of
-                                {ok, Data} -> {true, {Name, Data}};
-                                _ -> false
-                            end
-                        catch
-                            _:_ -> false
-                        end
-                    end,
-                    EventPaths
-                ),
-                
-                {ok, Events};
-                
-            false ->
-                % Regular path handling - simplified
+        case Path of
+            "/:cluster_events/" ->
+                % Get all cluster events
+                Pattern = [<<"cluster_events">>, ?KHEPRI_WILDCARD_STAR],
+                case khepri:get_many(Pattern) of
+                    {ok, Results} ->
+                        Events = lists:map(
+                            fun({FullPath, Value}) ->
+                                EventName = lists:last(FullPath),
+                                {EventName, Value}
+                            end,
+                            maps:to_list(Results)
+                        ),
+                        {ok, Events};
+                    {error, _} ->
+                        {ok, []}
+                end;
+            _ ->
+                % Regular path handling
                 {ok, []}
         end
     catch
