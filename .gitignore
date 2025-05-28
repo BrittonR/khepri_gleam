@@ -4,3 +4,4 @@
 erl_crash.dump
 khepri#*
 .direnv
+khepri_export.erl
