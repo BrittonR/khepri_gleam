@@ -115,6 +115,16 @@ pub type CompareOp {
   LessThanOrEqual
 }
 
+// Helper function to decode a 2-tuple
+fn decode_tuple2(
+  first: decode.Decoder(a),
+  second: decode.Decoder(b),
+) -> decode.Decoder(#(a, b)) {
+  use a <- decode.at([0], first)
+  use b <- decode.at([1], second)
+  decode.success(#(a, b))
+}
+
 // Helper function to convert Gleam path to Khepri path format
 pub fn to_khepri_path(path: String) -> List(String) {
   // Remove the leading ":" if present
@@ -152,7 +162,7 @@ pub fn get_string(path: String) -> Result(String, String) {
 
   case get(khepri_path) {
     Ok(value) -> {
-      // Use decode.run with decode.string decoder
+      // For any value, convert to string representation
       case decode.run(value, decode.string) {
         Ok(str) -> Ok(str)
         Error(_) -> Ok(string.inspect(value))
@@ -168,7 +178,6 @@ pub fn get_int(path: String) -> Result(Int, String) {
 
   case get(khepri_path) {
     Ok(value) -> {
-      // Use decode.run with decode.int decoder
       case decode.run(value, decode.int) {
         Ok(num) -> Ok(num)
         Error(_) -> Error("Failed to decode value as integer")
@@ -184,7 +193,6 @@ pub fn get_bool(path: String) -> Result(Bool, String) {
 
   case get(khepri_path) {
     Ok(value) -> {
-      // Use decode.run with decode.bool decoder
       case decode.run(value, decode.bool) {
         Ok(b) -> Ok(b)
         Error(_) -> Error("Failed to decode value as boolean")
@@ -246,8 +254,7 @@ pub fn list_children(
   case list_children_raw(path_list) {
     Ok(children) -> {
       // The children list is a raw Erlang term, we need to decode it 
-      // Use decode.run with the appropriate decoder
-      let decoder = decode.list(decode.tuple2(decode.string, decode.dynamic))
+      let decoder = decode.list(decode_tuple2(decode.string, decode.dynamic))
       case decode.run(children, decoder) {
         Ok(items) -> Ok(items)
         Error(_) -> Error("Failed to decode children list")
@@ -306,9 +313,9 @@ pub fn list_directory(
         Ok(children) -> {
           io.println("Raw children result: " <> string.inspect(children))
 
-          // Parse the result with proper decoder
+          // Parse the result
           let decoder =
-            decode.list(decode.tuple2(decode.string, decode.dynamic))
+            decode.list(decode_tuple2(decode.string, decode.dynamic))
           case decode.run(children, decoder) {
             Ok(items) -> Ok(items)
             Error(_) -> Error("Failed to decode children list")
@@ -349,7 +356,6 @@ pub fn tx_exists_path(path: String) -> Result(Bool, String) {
   let path_list = to_khepri_path(path)
   case do_transaction_exists(path_list) {
     Ok(result) -> {
-      // Use decode.run with decode.bool decoder
       case decode.run(result, decode.bool) {
         Ok(exists) -> Ok(exists)
         Error(_) -> Error("Failed to decode boolean result")
