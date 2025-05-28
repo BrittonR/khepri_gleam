@@ -218,12 +218,14 @@ get_store_id() ->
     atom_to_list(StoreId).
 
 %% Check if a store is running
+is_store_running(StoreId) when is_binary(StoreId) ->
+    AtomStoreId = binary_to_atom(StoreId, utf8),
+    khepri_cluster:is_store_running(AtomStoreId);
 is_store_running(StoreId) when is_list(StoreId) ->
     AtomStoreId = list_to_atom(StoreId),
     khepri_cluster:is_store_running(AtomStoreId);
 is_store_running(StoreId) when is_atom(StoreId) ->
     khepri_cluster:is_store_running(StoreId).
-
 %% List all running store IDs
 list_store_ids() ->
     StoreIds = khepri_cluster:get_store_ids(),
