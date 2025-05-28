@@ -174,7 +174,7 @@ string_to_khepri_path(Path) when is_list(Path) ->
 condition_to_erlang({name_is, Name}) ->
     Name;
 condition_to_erlang(any) ->
-    '_'; % Use underscore for wildcard
+    ?KHEPRI_WILDCARD_STAR;  % Use Khepri's wildcard constant instead of '_'
 condition_to_erlang({data_matches, Pattern}) ->
     %% Create proper IfDataMatches condition
     #{'__struct__' => 'Elixir.Khepri.Condition.IfDataMatches',
@@ -223,7 +223,7 @@ condition_to_erlang({child_list_length, Count, Op}) ->
       operator => Op};
 condition_to_erlang(Unknown) ->
     io:format("Unknown condition: ~p~n", [Unknown]),
-    '_'.
+    ?KHEPRI_WILDCARD_STAR.  % Default to Khepri wildcard instead of '_'
 
 %% Convert path with conditions to Erlang format
 to_pattern_path(PathWithConditions) ->
@@ -320,13 +320,38 @@ exists_pattern(Path) ->
         
         io:format("Converted path: ~p~n", [ConvertedPath]),
         
-        khepri:exists(ConvertedPath)
+        % Check if the path contains wildcards
+        HasWildcard = lists:any(
+            fun(Component) ->
+                Component =:= ?KHEPRI_WILDCARD_STAR orelse
+                Component =:= ?KHEPRI_WILDCARD_STAR_STAR
+            end,
+            ConvertedPath
+        ),
+        
+        case HasWildcard of
+            true ->
+                % Use get_many for wildcard patterns
+                io:format("Path contains wildcard, using get_many~n"),
+                case khepri:get_many(ConvertedPath) of
+                    {ok, Results} when map_size(Results) > 0 ->
+                        % Found at least one match
+                        true;
+                    {ok, _EmptyResults} ->
+                        % No matches found
+                        false;
+                    {error, _Reason} ->
+                        false
+                end;
+            false ->
+                % Use regular exists for non-wildcard paths
+                khepri:exists(ConvertedPath)
+        end
     catch
         error:Reason -> 
             io:format("Exists pattern error: ~p~n", [Reason]),
             false
     end.
-
 %% List children of a path
 list_children(Path) ->
     try
@@ -452,13 +477,13 @@ export_data(Path, CallbackModule, Filename) ->
                 {error, io_lib:format("Export failed: ~p", [Reason])}
         end
     catch
-        error:Reason -> 
-            io:format("Export error: ~p~n", [Reason]),
-            {error, Reason}
+        error:ExportError ->   % Changed from 'Reason' to 'ExportError'
+            io:format("Export error: ~p~n", [ExportError]),
+            {error, ExportError}
     end.
 
 %% Import data from a file into Khepri
-import_data(CallbackModule, Filename) ->
+import_data(_CallbackModule, Filename) ->  % Added underscore prefix
     try
         io:format("Importing data from file: ~p~n", [Filename]),
         
@@ -483,11 +508,10 @@ import_data(CallbackModule, Filename) ->
         
         {ok, ok}
     catch
-        error:Reason -> 
-            io:format("Import error: ~p~n", [Reason]),
-            {error, Reason}
+        error:ImportError ->   % Also renamed for consistency
+            io:format("Import error: ~p~n", [ImportError]),
+            {error, ImportError}
     end.
-
 %% Clear everything
 clear_all() ->
     % Delete the root node in Khepri
