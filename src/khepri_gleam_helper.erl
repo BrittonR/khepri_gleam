@@ -19,9 +19,11 @@
          register_path/1,
          unregister_path/1,
          get_registered_paths/0,
-        clear_path_registry/0,
-        clear_all/0,
-        safe_list_directory/1]).
+         clear_path_registry/0,
+         clear_all/0,
+         safe_list_directory/1,
+         get_many/1,
+         list_directory_direct/1]).
 
 start() ->
     io:format("Starting Khepri with default configuration...~n"),
@@ -33,6 +35,7 @@ start() ->
     clear_path_registry(),
     
     ok.
+
 %% Path registry management functions
 init_path_registry() ->
     % Create ETS table if it doesn't exist
@@ -65,8 +68,6 @@ register_parent_paths(Path) ->
     register_parent_paths(ParentPath).
 
 %% Enhanced put function with proper path handling
-%% In khepri_gleam_helper.erl, modify the put_with_path function
-
 put_with_path(Path, Data) ->
     io:format("Putting data at path: ~p~n", [Path]),
     io:format("Data: ~p~n", [Data]),
@@ -140,6 +141,107 @@ register_path_on_all_nodes(Path) ->
         end,
         Nodes
     ).
+
+%% Get multiple values matching a pattern
+get_many(Pattern) ->
+    io:format("Getting many with pattern: ~p~n", [Pattern]),
+    
+    % Convert string pattern elements to binaries
+    BinaryPattern = lists:map(
+        fun("_") -> '_';  % Keep wildcards as atoms
+           (Part) when is_list(Part) -> list_to_binary(Part);
+           (Part) -> Part
+        end,
+        Pattern
+    ),
+    
+    case khepri:get_many(BinaryPattern) of
+        {ok, Results} ->
+            % Convert the map to a list of {Path, Value} tuples
+            ResultList = maps:to_list(Results),
+            % Convert paths back to strings
+            ConvertedResults = lists:map(fun({Path, Value}) ->
+                StringPath = lists:map(fun(P) when is_binary(P) -> binary_to_list(P);
+                                         (P) -> P
+                                      end, Path),
+                {StringPath, Value}
+            end, ResultList),
+            {ok, ConvertedResults};
+        {error, Reason} ->
+            {error, io_lib:format("~p", [Reason])}
+    end.
+
+%% List directory contents directly
+list_directory_direct(Path) ->
+    io:format("Listing directory: ~p~n", [Path]),
+    
+    % Convert path to binary list
+    BinaryPath = case Path of
+        "/:services/" -> [<<"services">>];
+        _ -> string_to_khepri_path(Path)
+    end,
+    
+    % Build a pattern to match all children
+    Pattern = BinaryPath ++ ['_'],
+    
+    io:format("Using pattern: ~p~n", [Pattern]),
+    
+    case khepri:get_many(Pattern) of
+        {ok, Results} ->
+            io:format("Raw results map: ~p~n", [Results]),
+            
+            % Convert map to list and extract children
+            Children = lists:filtermap(fun({FullPath, Value}) ->
+                io:format("Processing path: ~p~n", [FullPath]),
+                
+                % Check if this is a direct child
+                case FullPath of
+                    % Match paths that are exactly one level deeper
+                    _ when length(FullPath) == length(BinaryPath) + 1 ->
+                        % Get the child name (last element)
+                        ChildName = lists:last(FullPath),
+                        
+                        % Convert binary to string if needed
+                        ChildNameStr = case ChildName of
+                            Bin when is_binary(Bin) -> binary_to_list(Bin);
+                            Atom when is_atom(Atom) -> atom_to_list(Atom);
+                            Other -> io_lib:format("~p", [Other])
+                        end,
+                        
+                        io:format("Found child: ~s with value: ~p~n", [ChildNameStr, Value]),
+                        {true, {ChildNameStr, Value}};
+                    _ ->
+                        false
+                end
+            end, maps:to_list(Results)),
+            
+            io:format("Found ~p children~n", [length(Children)]),
+            {ok, Children};
+        {error, Reason} ->
+            io:format("Error listing directory: ~p~n", [Reason]),
+            {error, io_lib:format("Failed to list directory: ~p", [Reason])}
+    end.
+
+%% Helper to convert string path to Khepri path format
+string_to_khepri_path(Path) when is_list(Path) ->
+    % Remove leading slashes and colons
+    CleanPath = case Path of
+        "/:services/" -> "services";
+        "/:services" -> "services";
+        "/:" ++ Rest -> Rest;
+        "/" ++ Rest -> Rest;
+        Other -> Other
+    end,
+    
+    % Split by "/" and convert to binaries
+    Parts = string:split(CleanPath, "/", all),
+    lists:map(fun(Part) -> 
+        case Part of
+            "" -> skip;
+            P -> list_to_binary(P)
+        end
+    end, Parts) -- [skip].
+
 %% Convert Gleam condition to Erlang term
 condition_to_erlang({name_is, Name}) ->
     Name;
@@ -600,6 +702,7 @@ export_data(Path, CallbackModule, Filename) ->
             io:format("Export error: ~p~n", [Reason]),
             {error, Reason}
     end.
+
 %% Import data from a file into Khepri - using path registry
 import_data(CallbackModule, Filename) ->
     try
@@ -639,10 +742,12 @@ import_data(CallbackModule, Filename) ->
             io:format("Import error: ~p~n", [Reason]),
             {error, Reason}
     end.
+
 %% Clear all registered paths
 clear_path_registry() ->
     init_path_registry(),
     ets:delete_all_objects(khepri_paths).
+
 %% Clear everything (database and registry)
 clear_all() ->
     % Clear the path registry
@@ -652,6 +757,7 @@ clear_all() ->
     khepri:delete([]),
     
     {ok, ok}.
+
 %% Safe directory listing that won't crash if items disappear
 safe_list_directory(Path) ->
     try
@@ -704,7 +810,7 @@ safe_list_directory(Path) ->
             {ok, []}  % Return empty list instead of error
     end.
 
-        %% Helper function for operator conversion
+%% Helper function for operator conversion
 convert_compare_op(greater_than) -> 'gt';
 convert_compare_op(less_than) -> 'lt';
 convert_compare_op(equal) -> 'eq';
