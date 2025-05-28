@@ -435,3 +435,14 @@ fn handle_message(
     }
   }
 }
+
+/// Check if a store is running
+///
+/// ## Parameters
+/// - `store_id`: The store ID to check
+///
+/// ## Returns
+/// - `True` if the store is running
+/// - `False` if the store is not running
+@external(erlang, "khepri_gleam_cluster_helper", "is_store_running")
+pub fn is_store_running(store_id: String) -> Bool
