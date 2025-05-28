@@ -150,6 +150,7 @@ get_many(Pattern) ->
     BinaryPattern = lists:map(
         fun("_") -> '_';  % Keep wildcards as atoms
            (Part) when is_list(Part) -> list_to_binary(Part);
+           (Part) when is_binary(Part) -> Part;  % Already binary
            (Part) -> Part
         end,
         Pattern
@@ -162,6 +163,7 @@ get_many(Pattern) ->
             % Convert paths back to strings
             ConvertedResults = lists:map(fun({Path, Value}) ->
                 StringPath = lists:map(fun(P) when is_binary(P) -> binary_to_list(P);
+                                         (P) when is_atom(P) -> atom_to_list(P);
                                          (P) -> P
                                       end, Path),
                 {StringPath, Value}
@@ -170,7 +172,6 @@ get_many(Pattern) ->
         {error, Reason} ->
             {error, io_lib:format("~p", [Reason])}
     end.
-
 %% List directory contents directly
 list_directory_direct(Path) ->
     io:format("Listing directory: ~p~n", [Path]),
@@ -223,6 +224,9 @@ list_directory_direct(Path) ->
     end.
 
 %% Helper to convert string path to Khepri path format
+string_to_khepri_path(Path) when is_binary(Path) ->
+    % Convert binary to list first
+    string_to_khepri_path(binary_to_list(Path));
 string_to_khepri_path(Path) when is_list(Path) ->
     % Remove leading slashes and colons
     CleanPath = case Path of
@@ -241,7 +245,6 @@ string_to_khepri_path(Path) when is_list(Path) ->
             P -> list_to_binary(P)
         end
     end, Parts) -- [skip].
-
 %% Convert Gleam condition to Erlang term
 condition_to_erlang({name_is, Name}) ->
     Name;
